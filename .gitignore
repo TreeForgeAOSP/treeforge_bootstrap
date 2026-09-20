@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Generated bootstrap state
+out/
+work/
+providers/
+.keys/
+
+# Packaging
+build/
+dist/
+*.egg-info/
+
+# Audits
+.smoke/
+
+# Editors / OS
+*.swp
+*.swo
+.DS_Store

@@ -1,0 +1,32 @@
+{
+  "artifact": {
+    "consumer_signing": "pixel_partitioner",
+    "menu_identity": "TreeForge Menu",
+    "name": "treeforge-bootstrap-tangorpro-android15-runtime.tar.xz",
+    "sha256": "c94ce84e58a105fe38e30000469747358571edd47b2216353a77a9d729f6c342",
+    "signed_image": false
+  },
+  "consumer": "pixel_partitioner",
+  "device": "tangorpro",
+  "name": "treeforge-bootstrap",
+  "platform": "android-15",
+  "providers": {
+    "pixel-partitioner-adbd": {
+      "architecture": "arm64",
+      "release": "android-15.0.0_r36-1",
+      "runtime_sha256": "938587531b1a4f6ee74d591ffd5be84459d43402e0ed54cadfa17283b680bef8"
+    }
+  },
+  "repository": "TreeForgeDEV/treeforge_bootstrap",
+  "role": "persistent-installed-bootstrap",
+  "runtime": {
+    "assembly": "treeforge-source-plus-pinned-providers",
+    "consumer_signing": "pixel_partitioner",
+    "menu_identity": "TreeForge Menu",
+    "reproducible": true,
+    "runtime_seed": "retired",
+    "signed_image": false
+  },
+  "schema": 1,
+  "status": "self-contained-local-provider-ready-not-released"
+}
