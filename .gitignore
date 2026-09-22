@@ -21,3 +21,6 @@ dist/
 *.swp
 *.swo
 .DS_Store
+
+# Local patch safety backups
+*.before-*

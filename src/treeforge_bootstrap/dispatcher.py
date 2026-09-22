@@ -8,6 +8,16 @@ import struct
 import subprocess
 import tomllib
 
+from .menu import (
+    MenuAction,
+    MenuCondition,
+    MenuIcon,
+    MenuLabelState,
+    MenuPage,
+    MenuProfile,
+    load_default_profile,
+)
+
 
 class TreeForgeDispatcherError(
     RuntimeError
@@ -244,7 +254,7 @@ int memcmp(
 #define O_NONBLOCK 04000
 #define O_DIRECTORY 040000
 
-#define PIXEL_PARTITIONER_TRANSITION_FD 99
+#define TREEFORGE_BOOTSTRAP_TRANSITION_FD 99
 #define PROT_READ 1
 #define PROT_WRITE 2
 
@@ -261,6 +271,34 @@ int memcmp(
 #define LINUX_REBOOT_CMD_RESTART2 0xa1b2c3d4UL
 
 #define EV_KEY 1
+#define EV_ABS 3
+
+#define ABS_MT_SLOT 0x2f
+#define ABS_MT_POSITION_X 0x35
+#define ABS_MT_POSITION_Y 0x36
+#define ABS_MT_TRACKING_ID 0x39
+
+#define TFB_TOUCH_RAW_WIDTH 1600
+#define TFB_TOUCH_RAW_HEIGHT 2560
+#define TFB_TOUCH_TAP_SLOP 96
+
+/*
+ * TFB_LANDSCAPE_MENU_V17
+ *
+ * Pixel Tablet's physical boot UI is landscape while the retained
+ * framebuffer bridge exposes the panel's native 1600x2560 scanout.
+ * TreeForge therefore owns a logical 2560x1600 camera-top landscape
+ * coordinate system and rotates only its own drawing/touch geometry.
+ *
+ * No DRM plane rotation or kernel display programming is introduced.
+ */
+#define TFB_UI_LOGICAL_WIDTH 2560U
+#define TFB_UI_LOGICAL_HEIGHT 1600U
+#define TFB_UI_MENU_X 1340U
+#define TFB_UI_MENU_RIGHT_MARGIN 120U
+#define TFB_UI_CONTENT_TOP 300U
+#define TFB_UI_CONTENT_BOTTOM 1430U
+#define TFB_UI_ROW_GAP 28U
 #define KEY_VOLUMEDOWN 114
 #define KEY_VOLUMEUP 115
 #define KEY_POWER 116
@@ -271,12 +309,12 @@ int memcmp(
 #define POLL_INTERVAL_MS 25
 
 
-struct pp_timespec {
+struct tfb_timespec {
     long tv_sec;
     long tv_nsec;
 };
 
-struct pp_input_event {
+struct tfb_input_event {
     long tv_sec;
     long tv_usec;
     u16 type;
@@ -284,7 +322,7 @@ struct pp_input_event {
     s32 value;
 };
 
-struct pp_linux_dirent64 {
+struct tfb_linux_dirent64 {
     u64 d_ino;
     long long d_off;
     u16 d_reclen;
@@ -316,7 +354,7 @@ struct pp_linux_dirent64 {
         | ((unsigned long) (size) << TF_IOC_SIZESHIFT) \
     )
 
-static long pp_syscall6(
+static long tfb_syscall6(
     long number,
     long a0,
     long a1,
@@ -348,14 +386,14 @@ static long pp_syscall6(
     return x0;
 }
 
-static long pp_syscall4(
+static long tfb_syscall4(
     long number,
     long a0,
     long a1,
     long a2,
     long a3
 ) {
-    return pp_syscall6(
+    return tfb_syscall6(
         number,
         a0,
         a1,
@@ -366,13 +404,13 @@ static long pp_syscall4(
     );
 }
 
-static long pp_syscall3(
+static long tfb_syscall3(
     long number,
     long a0,
     long a1,
     long a2
 ) {
-    return pp_syscall6(
+    return tfb_syscall6(
         number,
         a0,
         a1,
@@ -383,12 +421,12 @@ static long pp_syscall3(
     );
 }
 
-static long pp_syscall2(
+static long tfb_syscall2(
     long number,
     long a0,
     long a1
 ) {
-    return pp_syscall6(
+    return tfb_syscall6(
         number,
         a0,
         a1,
@@ -399,11 +437,11 @@ static long pp_syscall2(
     );
 }
 
-static long pp_syscall1(
+static long tfb_syscall1(
     long number,
     long a0
 ) {
-    return pp_syscall6(
+    return tfb_syscall6(
         number,
         a0,
         0,
@@ -414,7 +452,7 @@ static long pp_syscall1(
     );
 }
 
-static usize pp_strlen(
+static usize tfb_strlen(
     const char *value
 ) {
     usize length = 0;
@@ -427,11 +465,11 @@ static usize pp_strlen(
 }
 
 
-static long pp_open(
+static long tfb_open(
     const char *path,
     long flags
 ) {
-    return pp_syscall4(
+    return tfb_syscall4(
         SYS_OPENAT,
         AT_FDCWD,
         (long) path,
@@ -440,18 +478,18 @@ static long pp_open(
     );
 }
 
-static void pp_close(
+static void tfb_close(
     long fd
 ) {
     if (fd >= 0) {
-        pp_syscall1(
+        tfb_syscall1(
             SYS_CLOSE,
             fd
         );
     }
 }
 
-static void pp_write_all(
+static void tfb_write_all(
     long fd,
     const char *value
 ) {
@@ -459,14 +497,14 @@ static void pp_write_all(
         return;
     }
 
-    usize remaining = pp_strlen(
+    usize remaining = tfb_strlen(
         value
     );
 
     const char *cursor = value;
 
     while (remaining != 0) {
-        long written = pp_syscall3(
+        long written = tfb_syscall3(
             SYS_WRITE,
             fd,
             (long) cursor,
@@ -482,7 +520,7 @@ static void pp_write_all(
     }
 }
 
-static int pp_write_bytes(
+static int tfb_write_bytes(
     long fd,
     const unsigned char *value,
     usize size
@@ -495,7 +533,7 @@ static int pp_write_bytes(
     const unsigned char *cursor = value;
 
     while (remaining != 0) {
-        long written = pp_syscall3(
+        long written = tfb_syscall3(
             SYS_WRITE,
             fd,
             (long) cursor,
@@ -515,19 +553,19 @@ static int pp_write_bytes(
 
 
 
-static long pp_copy_fd_failure_code = 0;
+static long tfb_copy_fd_failure_code = 0;
 
-static const char *pp_runtime_materialize_failure_stage =
+static const char *tfb_runtime_materialize_failure_stage =
     "NONE";
 
-static const char *pp_runtime_materialize_failure_path =
+static const char *tfb_runtime_materialize_failure_path =
     0;
 
-static const char *pp_runtime_materialize_failure_source_path =
+static const char *tfb_runtime_materialize_failure_source_path =
     0;
 
 
-static const char *pp_copy_fd_failure_code_name(
+static const char *tfb_copy_fd_failure_code_name(
     long code
 ) {
     switch (code) {
@@ -551,7 +589,7 @@ static const char *pp_copy_fd_failure_code_name(
 }
 
 
-static int pp_read_exact(
+static int tfb_read_exact(
     long fd,
     unsigned char *buffer,
     usize size
@@ -560,7 +598,7 @@ static int pp_read_exact(
     unsigned char *cursor = buffer;
 
     while (remaining != 0) {
-        long amount = pp_syscall3(
+        long amount = tfb_syscall3(
             SYS_READ,
             fd,
             (long) cursor,
@@ -568,7 +606,7 @@ static int pp_read_exact(
         );
 
         if (amount <= 0) {
-            pp_copy_fd_failure_code = (
+            tfb_copy_fd_failure_code = (
                 amount < 0
                 ? amount
                 : -5
@@ -585,7 +623,7 @@ static int pp_read_exact(
 }
 
 
-static u32 pp_u32_le(
+static u32 tfb_u32_le(
     const unsigned char *value
 ) {
     return (
@@ -597,7 +635,7 @@ static u32 pp_u32_le(
 }
 
 
-static u64 pp_u64_le(
+static u64 tfb_u64_le(
     const unsigned char *value
 ) {
     return (
@@ -613,7 +651,7 @@ static u64 pp_u64_le(
 }
 
 
-static int pp_magic8_equal(
+static int tfb_magic8_equal(
     const unsigned char *value,
     const char *expected
 ) {
@@ -630,7 +668,7 @@ static int pp_magic8_equal(
 }
 
 
-static int pp_create_parent_directories(
+static int tfb_create_parent_directories(
     const char *path
 ) {
     if (
@@ -642,7 +680,7 @@ static int pp_create_parent_directories(
 
     char buffer[512];
 
-    usize length = pp_strlen(
+    usize length = tfb_strlen(
         path
     );
 
@@ -663,7 +701,7 @@ static int pp_create_parent_directories(
 
     /*
      * Existing directories are harmless. The final destination open
-     * performed by pp_copy_fd_to_path() is the authoritative test.
+     * performed by tfb_copy_fd_to_path() is the authoritative test.
      */
     for (
         usize index = 1;
@@ -676,7 +714,7 @@ static int pp_create_parent_directories(
 
         buffer[index] = '\0';
 
-        pp_syscall3(
+        tfb_syscall3(
             SYS_MKDIRAT,
             AT_FDCWD,
             (long) buffer,
@@ -690,7 +728,7 @@ static int pp_create_parent_directories(
 }
 
 
-static int pp_materialize_runtime_bundle(void) {
+static int tfb_materialize_runtime_bundle(void) {
     /*
      * FD99 is the exact open /init descriptor that has already been
      * proven to survive Android FirstStageMain / FreeRamdisk and the
@@ -698,31 +736,31 @@ static int pp_materialize_runtime_bundle(void) {
      *
      * The dispatcher ELF carries a deterministic runtime bundle after
      * its ELF payload.  Locate its trailer from EOF, then stream each
-     * file directly from FD99 into /dev/pixel-partitioner-runtime.
+     * file directly from FD99 into /dev/treeforge-bootstrap-runtime.
      */
-    pp_runtime_materialize_failure_stage =
+    tfb_runtime_materialize_failure_stage =
         "NONE";
 
-    pp_runtime_materialize_failure_path =
+    tfb_runtime_materialize_failure_path =
         0;
 
-    pp_runtime_materialize_failure_source_path =
+    tfb_runtime_materialize_failure_source_path =
         "FD99 SELF BUNDLE";
 
-    pp_copy_fd_failure_code = 0;
+    tfb_copy_fd_failure_code = 0;
 
-    long trailer_position = pp_syscall3(
+    long trailer_position = tfb_syscall3(
         SYS_LSEEK,
-        PIXEL_PARTITIONER_TRANSITION_FD,
+        TREEFORGE_BOOTSTRAP_TRANSITION_FD,
         -16,
         SEEK_END
     );
 
     if (trailer_position < 0) {
-        pp_runtime_materialize_failure_stage =
+        tfb_runtime_materialize_failure_stage =
             "BUNDLE SEEK END";
 
-        pp_copy_fd_failure_code =
+        tfb_copy_fd_failure_code =
             trailer_position;
 
         return 0;
@@ -731,31 +769,31 @@ static int pp_materialize_runtime_bundle(void) {
     unsigned char trailer[16];
 
     if (
-        !pp_read_exact(
-            PIXEL_PARTITIONER_TRANSITION_FD,
+        !tfb_read_exact(
+            TREEFORGE_BOOTSTRAP_TRANSITION_FD,
             trailer,
             sizeof(trailer)
         )
     ) {
-        pp_runtime_materialize_failure_stage =
+        tfb_runtime_materialize_failure_stage =
             "BUNDLE TRAILER READ";
 
         return 0;
     }
 
     if (
-        !pp_magic8_equal(
+        !tfb_magic8_equal(
             trailer,
             "TFRTEND1"
         )
     ) {
-        pp_runtime_materialize_failure_stage =
+        tfb_runtime_materialize_failure_stage =
             "BUNDLE TRAILER MAGIC";
 
         return 0;
     }
 
-    u64 bundle_size = pp_u64_le(
+    u64 bundle_size = tfb_u64_le(
         trailer + 8
     );
 
@@ -764,7 +802,7 @@ static int pp_materialize_runtime_bundle(void) {
         || bundle_size
             > (u64) trailer_position
     ) {
-        pp_runtime_materialize_failure_stage =
+        tfb_runtime_materialize_failure_stage =
             "BUNDLE SIZE";
 
         return 0;
@@ -775,18 +813,18 @@ static int pp_materialize_runtime_bundle(void) {
         - (long) bundle_size
     );
 
-    long bundle_seek = pp_syscall3(
+    long bundle_seek = tfb_syscall3(
         SYS_LSEEK,
-        PIXEL_PARTITIONER_TRANSITION_FD,
+        TREEFORGE_BOOTSTRAP_TRANSITION_FD,
         bundle_start,
         SEEK_SET
     );
 
     if (bundle_seek < 0) {
-        pp_runtime_materialize_failure_stage =
+        tfb_runtime_materialize_failure_stage =
             "BUNDLE SEEK START";
 
-        pp_copy_fd_failure_code =
+        tfb_copy_fd_failure_code =
             bundle_seek;
 
         return 0;
@@ -795,31 +833,31 @@ static int pp_materialize_runtime_bundle(void) {
     unsigned char bundle_header[16];
 
     if (
-        !pp_read_exact(
-            PIXEL_PARTITIONER_TRANSITION_FD,
+        !tfb_read_exact(
+            TREEFORGE_BOOTSTRAP_TRANSITION_FD,
             bundle_header,
             sizeof(bundle_header)
         )
     ) {
-        pp_runtime_materialize_failure_stage =
+        tfb_runtime_materialize_failure_stage =
             "BUNDLE HEADER READ";
 
         return 0;
     }
 
     if (
-        !pp_magic8_equal(
+        !tfb_magic8_equal(
             bundle_header,
             "TFRTB001"
         )
     ) {
-        pp_runtime_materialize_failure_stage =
+        tfb_runtime_materialize_failure_stage =
             "BUNDLE HEADER MAGIC";
 
         return 0;
     }
 
-    u32 file_count = pp_u32_le(
+    u32 file_count = tfb_u32_le(
         bundle_header + 8
     );
 
@@ -827,7 +865,7 @@ static int pp_materialize_runtime_bundle(void) {
         file_count == 0
         || file_count > 256
     ) {
-        pp_runtime_materialize_failure_stage =
+        tfb_runtime_materialize_failure_stage =
             "BUNDLE FILE COUNT";
 
         return 0;
@@ -843,27 +881,27 @@ static int pp_materialize_runtime_bundle(void) {
         unsigned char entry_header[16];
 
         if (
-            !pp_read_exact(
-                PIXEL_PARTITIONER_TRANSITION_FD,
+            !tfb_read_exact(
+                TREEFORGE_BOOTSTRAP_TRANSITION_FD,
                 entry_header,
                 sizeof(entry_header)
             )
         ) {
-            pp_runtime_materialize_failure_stage =
+            tfb_runtime_materialize_failure_stage =
                 "ENTRY HEADER READ";
 
             return 0;
         }
 
-        u32 path_length = pp_u32_le(
+        u32 path_length = tfb_u32_le(
             entry_header
         );
 
-        u32 mode = pp_u32_le(
+        u32 mode = tfb_u32_le(
             entry_header + 4
         );
 
-        u64 payload_size = pp_u64_le(
+        u64 payload_size = tfb_u64_le(
             entry_header + 8
         );
 
@@ -873,21 +911,21 @@ static int pp_materialize_runtime_bundle(void) {
                 >= sizeof(destination_path)
             || mode > 0777U
         ) {
-            pp_runtime_materialize_failure_stage =
+            tfb_runtime_materialize_failure_stage =
                 "ENTRY METADATA";
 
             return 0;
         }
 
         if (
-            !pp_read_exact(
-                PIXEL_PARTITIONER_TRANSITION_FD,
+            !tfb_read_exact(
+                TREEFORGE_BOOTSTRAP_TRANSITION_FD,
                 (unsigned char *)
                     destination_path,
                 path_length
             )
         ) {
-            pp_runtime_materialize_failure_stage =
+            tfb_runtime_materialize_failure_stage =
                 "ENTRY PATH READ";
 
             return 0;
@@ -896,22 +934,22 @@ static int pp_materialize_runtime_bundle(void) {
         destination_path[path_length] =
             '\0';
 
-        pp_runtime_materialize_failure_path =
+        tfb_runtime_materialize_failure_path =
             destination_path;
 
         if (destination_path[0] != '/') {
-            pp_runtime_materialize_failure_stage =
+            tfb_runtime_materialize_failure_stage =
                 "ENTRY PATH INVALID";
 
             return 0;
         }
 
         if (
-            !pp_create_parent_directories(
+            !tfb_create_parent_directories(
                 destination_path
             )
         ) {
-            pp_runtime_materialize_failure_stage =
+            tfb_runtime_materialize_failure_stage =
                 "PARENT PATH";
 
             return 0;
@@ -933,21 +971,21 @@ static int pp_materialize_runtime_bundle(void) {
                 || payload_size
                     > (u64) sizeof(symlink_target)
             ) {
-                pp_runtime_materialize_failure_stage =
+                tfb_runtime_materialize_failure_stage =
                     "SYMLINK PAYLOAD SIZE";
 
                 return 0;
             }
 
             if (
-                !pp_read_exact(
-                    PIXEL_PARTITIONER_TRANSITION_FD,
+                !tfb_read_exact(
+                    TREEFORGE_BOOTSTRAP_TRANSITION_FD,
                     (unsigned char *)
                         symlink_target,
                     (usize) payload_size
                 )
             ) {
-                pp_runtime_materialize_failure_stage =
+                tfb_runtime_materialize_failure_stage =
                     "SYMLINK PAYLOAD READ";
 
                 return 0;
@@ -959,7 +997,7 @@ static int pp_materialize_runtime_bundle(void) {
                 ]
                 != '\0'
             ) {
-                pp_runtime_materialize_failure_stage =
+                tfb_runtime_materialize_failure_stage =
                     "SYMLINK TARGET TERMINATOR";
 
                 return 0;
@@ -975,7 +1013,7 @@ static int pp_materialize_runtime_bundle(void) {
                     symlink_target[target_index]
                     == '\0'
                 ) {
-                    pp_runtime_materialize_failure_stage =
+                    tfb_runtime_materialize_failure_stage =
                         "SYMLINK TARGET EMBEDDED NUL";
 
                     return 0;
@@ -986,14 +1024,14 @@ static int pp_materialize_runtime_bundle(void) {
              * A stale realization is harmless to remove.  Ignore
              * ENOENT and let symlinkat() be the authoritative result.
              */
-            pp_syscall3(
+            tfb_syscall3(
                 SYS_UNLINKAT,
                 AT_FDCWD,
                 (long) destination_path,
                 0
             );
 
-            long symlink_result = pp_syscall3(
+            long symlink_result = tfb_syscall3(
                 SYS_SYMLINKAT,
                 (long) symlink_target,
                 AT_FDCWD,
@@ -1001,10 +1039,10 @@ static int pp_materialize_runtime_bundle(void) {
             );
 
             if (symlink_result < 0) {
-                pp_runtime_materialize_failure_stage =
+                tfb_runtime_materialize_failure_stage =
                     "SYMLINK CREATE";
 
-                pp_copy_fd_failure_code =
+                tfb_copy_fd_failure_code =
                     symlink_result;
 
                 return 0;
@@ -1013,7 +1051,7 @@ static int pp_materialize_runtime_bundle(void) {
             continue;
         }
 
-        long destination_fd = pp_syscall4(
+        long destination_fd = tfb_syscall4(
             SYS_OPENAT,
             AT_FDCWD,
             (long) destination_path,
@@ -1024,10 +1062,10 @@ static int pp_materialize_runtime_bundle(void) {
         );
 
         if (destination_fd < 0) {
-            pp_runtime_materialize_failure_stage =
+            tfb_runtime_materialize_failure_stage =
                 "DESTINATION OPEN";
 
-            pp_copy_fd_failure_code =
+            tfb_copy_fd_failure_code =
                 destination_fd;
 
             return 0;
@@ -1044,28 +1082,28 @@ static int pp_materialize_runtime_bundle(void) {
                 : (usize) remaining
             );
 
-            long amount = pp_syscall3(
+            long amount = tfb_syscall3(
                 SYS_READ,
-                PIXEL_PARTITIONER_TRANSITION_FD,
+                TREEFORGE_BOOTSTRAP_TRANSITION_FD,
                 (long) buffer,
                 (long) requested
             );
 
             if (amount <= 0) {
-                pp_runtime_materialize_failure_stage =
+                tfb_runtime_materialize_failure_stage =
                     "BUNDLE DATA READ";
 
-                pp_copy_fd_failure_code = (
+                tfb_copy_fd_failure_code = (
                     amount < 0
                     ? amount
                     : -5
                 );
 
-                pp_close(
+                tfb_close(
                     destination_fd
                 );
 
-                pp_syscall3(
+                tfb_syscall3(
                     SYS_UNLINKAT,
                     AT_FDCWD,
                     (long) destination_path,
@@ -1076,23 +1114,23 @@ static int pp_materialize_runtime_bundle(void) {
             }
 
             if (
-                !pp_write_bytes(
+                !tfb_write_bytes(
                     destination_fd,
                     buffer,
                     (usize) amount
                 )
             ) {
-                pp_runtime_materialize_failure_stage =
+                tfb_runtime_materialize_failure_stage =
                     "DESTINATION WRITE";
 
-                pp_copy_fd_failure_code =
+                tfb_copy_fd_failure_code =
                     -5;
 
-                pp_close(
+                tfb_close(
                     destination_fd
                 );
 
-                pp_syscall3(
+                tfb_syscall3(
                     SYS_UNLINKAT,
                     AT_FDCWD,
                     (long) destination_path,
@@ -1107,7 +1145,7 @@ static int pp_materialize_runtime_bundle(void) {
             );
         }
 
-        pp_close(
+        tfb_close(
             destination_fd
         );
     }
@@ -1116,10 +1154,10 @@ static int pp_materialize_runtime_bundle(void) {
 }
 
 
-static void pp_sleep_ms(
+static void tfb_sleep_ms(
     long milliseconds
 ) {
-    struct pp_timespec delay;
+    struct tfb_timespec delay;
 
     delay.tv_sec = (
         milliseconds
@@ -1131,7 +1169,7 @@ static void pp_sleep_ms(
         % 1000
     ) * 1000000L;
 
-    pp_syscall2(
+    tfb_syscall2(
         SYS_NANOSLEEP,
         (long) &delay,
         0
@@ -1144,33 +1182,34 @@ static void pp_sleep_ms(
  * We derive evdev major/minor numbers from sysfs rather than
  * assuming a particular event-node assignment.
  */
-static long pp_tty = -1;
-static long pp_console = -1;
-static long pp_kmsg = -1;
+static long tfb_tty = -1;
+static long tfb_console = -1;
+static long tfb_kmsg = -1;
 
 /*
  * Retained TreeForge Bootstrap framebuffer menu session.
  *
- * The framebuffer uses the native DRM mode coordinates exactly as
- * exposed by the kernel. No rotation or orientation policy is
- * applied here.
+ * The framebuffer bridge itself still uses the native DRM mode
+ * coordinates exactly as exposed by the kernel. TreeForge V17 adds
+ * a software-only logical landscape presentation layer above this
+ * raw transport; no DRM plane rotation is requested.
  */
-static int pp_fb_menu_active = 0;
+static int tfb_fb_menu_active = 0;
 
 
-static long pp_fb_menu_mapped_address = -1;
-static u64 pp_fb_menu_mapped_size = 0;
+static long tfb_fb_menu_mapped_address = -1;
+static u64 tfb_fb_menu_mapped_size = 0;
 
-static u32 pp_fb_menu_width = 0;
-static u32 pp_fb_menu_height = 0;
-static u32 pp_fb_menu_pitch = 0;
+static u32 tfb_fb_menu_width = 0;
+static u32 tfb_fb_menu_height = 0;
+static u32 tfb_fb_menu_pitch = 0;
 
 
 
 
 
 /*
- * PIXEL_PARTITIONER_FB_CONSUMER_V1
+ * TREEFORGE_BOOTSTRAP_FB_CONSUMER_V1
  *
  * Early-menu transport for the read-only GS201 framebuffer bridge.
  *
@@ -1185,32 +1224,32 @@ static u32 pp_fb_menu_pitch = 0;
  *
  * No DECON/DPP/DRM programming is performed by this path.
  */
-#define PP_FB_DEVICE_PATH \
-    "/dev/pixel_partitioner_fb"
+#define TFB_FB_DEVICE_PATH \
+    "/dev/treeforge_bootstrap_fb"
 
-#define PP_FB_SYSFS_DEV_PATH \
-    "/sys/class/misc/pixel_partitioner_fb/dev"
+#define TFB_FB_SYSFS_DEV_PATH \
+    "/sys/class/misc/treeforge_bootstrap_fb/dev"
 
-#define PP_FB_ABI_VERSION 1U
+#define TFB_FB_ABI_VERSION 1U
 
-#define PP_FB_FLAG_LINEAR \
+#define TFB_FB_FLAG_LINEAR \
     (1U << 0)
 
-#define PP_FB_FLAG_WRITE_COMBINE \
+#define TFB_FB_FLAG_WRITE_COMBINE \
     (1U << 1)
 
-#define PP_FB_REQUIRED_FLAGS \
+#define TFB_FB_REQUIRED_FLAGS \
     ( \
-        PP_FB_FLAG_LINEAR \
-        | PP_FB_FLAG_WRITE_COMBINE \
+        TFB_FB_FLAG_LINEAR \
+        | TFB_FB_FLAG_WRITE_COMBINE \
     )
 
 /*
  * Linux generic _IO('P', 0x01).
  */
-#define PP_FB_IOCTL_SEAL 0x5001UL
+#define TFB_FB_IOCTL_SEAL 0x5001UL
 
-struct pp_fb_info {
+struct tfb_fb_info {
     u32 abi_version;
     u32 hw_format;
 
@@ -1233,18 +1272,18 @@ struct pp_fb_info {
     u64 mmap_bytes;
 };
 
-typedef char pp_fb_info_size_check[
-    sizeof(struct pp_fb_info) == 64
+typedef char tfb_fb_info_size_check[
+    sizeof(struct tfb_fb_info) == 64
     ? 1
     : -1
 ];
 
-static long pp_fb_fd = -1;
-static int pp_fb_active = 0;
-static int pp_fb_created_node = 0;
+static long tfb_fb_fd = -1;
+static int tfb_fb_active = 0;
+static int tfb_fb_created_node = 0;
 
 
-static void pp_fb_fill_rect(
+static void tfb_fb_fill_rect(
     u32 x,
     u32 y,
     u32 width,
@@ -1252,35 +1291,35 @@ static void pp_fb_fill_rect(
     u32 pixel
 ) {
     if (
-        !pp_fb_menu_active
-        || pp_fb_menu_mapped_address < 0
-        || x >= pp_fb_menu_width
-        || y >= pp_fb_menu_height
+        !tfb_fb_menu_active
+        || tfb_fb_menu_mapped_address < 0
+        || x >= tfb_fb_menu_width
+        || y >= tfb_fb_menu_height
     ) {
         return;
     }
 
     if (
         width
-        > pp_fb_menu_width - x
+        > tfb_fb_menu_width - x
     ) {
         width = (
-            pp_fb_menu_width - x
+            tfb_fb_menu_width - x
         );
     }
 
     if (
         height
-        > pp_fb_menu_height - y
+        > tfb_fb_menu_height - y
     ) {
         height = (
-            pp_fb_menu_height - y
+            tfb_fb_menu_height - y
         );
     }
 
     volatile unsigned char *base = (
         (volatile unsigned char *)
-        (usize) pp_fb_menu_mapped_address
+        (usize) tfb_fb_menu_mapped_address
     );
 
     for (
@@ -1296,7 +1335,7 @@ static void pp_fb_fill_rect(
                     (usize) (
                         y + row_index
                     )
-                    * (usize) pp_fb_menu_pitch
+                    * (usize) tfb_fb_menu_pitch
                 )
             )
         );
@@ -1314,7 +1353,7 @@ static void pp_fb_fill_rect(
 }
 
 
-static unsigned char pp_fb_glyph_row(
+static unsigned char tfb_fb_glyph_row(
     char character,
     int row
 ) {
@@ -1390,6 +1429,8 @@ static unsigned char pp_fb_glyph_row(
         case ':': return TF_GLYPH(0x00,0x04,0x04,0x00,0x04,0x04,0x00);
         case '=': return TF_GLYPH(0x00,0x1F,0x00,0x1F,0x00,0x00,0x00);
         case '+': return TF_GLYPH(0x00,0x04,0x04,0x1F,0x04,0x04,0x00);
+        case '%': return TF_GLYPH(0x19,0x1A,0x04,0x04,0x08,0x0B,0x13);
+        case '^': return TF_GLYPH(0x04,0x0A,0x11,0x00,0x00,0x00,0x00);
         case '(': return TF_GLYPH(0x02,0x04,0x08,0x08,0x08,0x04,0x02);
         case ')': return TF_GLYPH(0x08,0x04,0x02,0x02,0x02,0x04,0x08);
         case '[': return TF_GLYPH(0x0E,0x08,0x08,0x08,0x08,0x08,0x0E);
@@ -1416,7 +1457,7 @@ static unsigned char pp_fb_glyph_row(
 }
 
 
-static void pp_fb_draw_char(
+static void tfb_fb_draw_char(
     u32 x,
     u32 y,
     char value,
@@ -1429,7 +1470,7 @@ static void pp_fb_draw_char(
         row++
     ) {
         unsigned char bits = (
-            pp_fb_glyph_row(
+            tfb_fb_glyph_row(
                 value,
                 row
             )
@@ -1449,7 +1490,7 @@ static void pp_fb_draw_char(
                     )
                 )
             ) {
-                pp_fb_fill_rect(
+                tfb_fb_fill_rect(
                     x + (
                         (u32) column
                         * scale
@@ -1468,12 +1509,12 @@ static void pp_fb_draw_char(
 }
 
 
-static u32 pp_fb_text_width(
+static u32 tfb_fb_text_width(
     const char *value,
     u32 scale
 ) {
     usize length = (
-        pp_strlen(
+        tfb_strlen(
             value
         )
     );
@@ -1489,7 +1530,7 @@ static u32 pp_fb_text_width(
 }
 
 
-static void pp_fb_draw_text(
+static void tfb_fb_draw_text(
     u32 x,
     u32 y,
     const char *value,
@@ -1504,7 +1545,7 @@ static void pp_fb_draw_text(
         index++
     ) {
         if (value[index] != ' ') {
-            pp_fb_draw_char(
+            tfb_fb_draw_char(
                 cursor,
                 y,
                 value[index],
@@ -1521,450 +1562,2651 @@ static void pp_fb_draw_text(
 
 
 
-static const char pp_version[] =
-    "V__PIXEL_PARTITIONER_VERSION__";
+static const char tfb_version[] =
+    "V__TREEFORGE_BOOTSTRAP_VERSION__";
+
+
+#define TFB_ACTION_NONE 0
+#define TFB_ACTION_BOOT_ANDROID_SLOT_A 1
+#define TFB_ACTION_BOOT_ANDROID_SLOT_B 2
+#define TFB_ACTION_BOOT_ALTERNATE_OS 3
+#define TFB_ACTION_BOOT_ROOTED_ANDROID 4
+#define TFB_ACTION_INSTALL_ROOT 5
+#define TFB_ACTION_UNINSTALL_ROOT 6
+#define TFB_ACTION_TOGGLE_ROOT_PERSISTENCE 7
+#define TFB_ACTION_REBOOT_BOOTLOADER 8
+#define TFB_ACTION_REBOOT_RECOVERY 9
+#define TFB_ACTION_BACK 10
+
+#define TFB_CONDITION_ALWAYS 0
+#define TFB_CONDITION_FULL_AB 1
+#define TFB_CONDITION_ALTERNATE_OS_CONFIGURED 2
+#define TFB_CONDITION_ROOT_INSTALLED 3
+#define TFB_CONDITION_ROOT_NOT_INSTALLED 4
+
+#define TFB_LABEL_STATE_NONE 0
+#define TFB_LABEL_STATE_ROOT_PERSISTENCE 1
+#define TFB_LABEL_STATE_ALTERNATE_OS_NAME 2
+
+#define TFB_MENU_ICON_NONE 0
+#define TFB_MENU_ICON_ANDROID 1
+#define TFB_MENU_ICON_RECOVERY 2
+#define TFB_MENU_ICON_MAINTENANCE 3
+#define TFB_MENU_ICON_ALTERNATE_OS 4
+#define TFB_MENU_ICON_ROOT 5
+#define TFB_MENU_ICON_PIXEL_PARTITIONER 6
+#define TFB_MENU_ICON_BOOTLOADER 7
+#define TFB_MENU_ICON_BACK 8
+
+#define TFB_MENU_STACK_DEPTH 4
+
+
+struct tfb_menu_page;
+
+
+struct tfb_menu_entry {
+    const char *label;
+    const char *description;
+    int icon;
+    int action;
+    const struct tfb_menu_page *submenu;
+    int condition;
+    int label_state;
+};
+
+
+struct tfb_menu_page {
+    const char *title;
+    const char *subtitle;
+    u32 timeout_ms;
+    int timeout_action;
+    int default_entry_index;
+    const struct tfb_menu_entry *entries;
+    int entry_count;
+};
+
+
+struct tfb_menu_runtime_state {
+    int full_ab;
+    int alternate_os_configured;
+    char alternate_os_name[64];
+    int root_installed;
+    int root_persistence_enabled;
+};
+
+
+static struct tfb_menu_runtime_state
+tfb_menu_state = {
+    0,
+    0,
+    "Alternate OS",
+    0,
+    0,
+};
+
+
+static const char *tfb_menu_status = 0;
+
+static char **tfb_runtime_envp = 0;
+
+
+__TREEFORGE_MENU_PROFILE__
+
+
+
+static int tfb_menu_read_state_text(
+    const char *path,
+    char *buffer,
+    usize capacity
+) {
+    if (
+        !path
+        || !buffer
+        || capacity < 2
+    ) {
+        return 0;
+    }
+
+    long fd = tfb_open(
+        path,
+        O_RDONLY
+        | O_NONBLOCK
+    );
+
+    if (fd < 0) {
+        return 0;
+    }
+
+    long amount = tfb_syscall3(
+        SYS_READ,
+        fd,
+        (long) buffer,
+        (long) (
+            capacity - 1
+        )
+    );
+
+    tfb_close(
+        fd
+    );
+
+    if (amount <= 0) {
+        return 0;
+    }
+
+    usize length = (
+        (usize) amount
+    );
+
+    if (length >= capacity) {
+        length = capacity - 1;
+    }
+
+    buffer[length] = '\0';
+
+    for (
+        usize index = 0;
+        index < length;
+        index++
+    ) {
+        unsigned char value = (
+            (unsigned char)
+            buffer[index]
+        );
+
+        if (
+            value == '\n'
+            || value == '\r'
+        ) {
+            buffer[index] = '\0';
+            length = index;
+            break;
+        }
+
+        if (
+            value < 0x20
+            || value > 0x7e
+        ) {
+            buffer[0] = '\0';
+            return 0;
+        }
+    }
+
+    return length > 0;
+}
 
 
 /*
- * PIXEL_PARTITIONER_STANDALONE_POLICY_V1
+ * TFB_FULL_AB_GEOMETRY_DETECTION_V17_1A
  *
- * Hardware implementation is inherited from the proven TreeForge Bootstrap
- * dispatcher.  The visible policy is standalone TreeForge Bootstrap.
+ * Current release support is explicitly tangorpro. Its canonical
+ * factory GPT places super at sda25 with 16,662,528 512-byte
+ * sectors. TreeForge Full A/B grows that physical partition.
+ *
+ * Keep the metadata marker as an explicit affirmative contract,
+ * but do not require it for a converted device.
  */
+#define TFB_TANGORPRO_STOCK_SUPER_SECTORS 16662528ULL
 
-static int pp_menu_item_count(void) {
-    return 1;
-}
 
-static const char *pp_menu_item(
-    int index
+static int tfb_ui_read_u64(
+    const char *path,
+    u64 *output
+);
+
+
+static void tfb_menu_load_runtime_state(
+    void
 ) {
-    static const char *items[1] = {
-        "REBOOT BOOTLOADER",
-    };
+    int full_ab_by_marker = 0;
+
+    long full_ab = tfb_open(
+        "/metadata/treeforge-bootstrap/full-ab",
+        O_RDONLY
+        | O_NONBLOCK
+    );
+
+    if (full_ab >= 0) {
+        full_ab_by_marker = 1;
+
+        tfb_close(
+            full_ab
+        );
+    }
+
+    u64 super_sectors = 0;
+
+    int full_ab_by_geometry = (
+        tfb_ui_read_u64(
+            "/sys/class/block/sda25/size",
+            &super_sectors
+        )
+        && super_sectors
+            > TFB_TANGORPRO_STOCK_SUPER_SECTORS
+    );
+
+    tfb_menu_state.full_ab = (
+        full_ab_by_marker
+        || full_ab_by_geometry
+    );
+
+    char alternate_name[64];
 
     if (
-        index < 0
-        || index >= pp_menu_item_count()
+        tfb_menu_read_state_text(
+            "/metadata/treeforge-bootstrap/"
+            "alternate-os-name",
+            alternate_name,
+            sizeof(alternate_name)
+        )
     ) {
+        usize index = 0;
+
+        while (
+            alternate_name[index] != '\0'
+            && index
+                < sizeof(
+                    tfb_menu_state
+                    .alternate_os_name
+                ) - 1
+        ) {
+            tfb_menu_state
+                .alternate_os_name[index] =
+                alternate_name[index];
+
+            index++;
+        }
+
+        tfb_menu_state
+            .alternate_os_name[index] =
+            '\0';
+
+        tfb_menu_state
+            .alternate_os_configured = 1;
+    } else {
+        static const char fallback[] =
+            "Alternate OS";
+
+        usize index = 0;
+
+        while (
+            fallback[index] != '\0'
+            && index
+                < sizeof(
+                    tfb_menu_state
+                    .alternate_os_name
+                ) - 1
+        ) {
+            tfb_menu_state
+                .alternate_os_name[index] =
+                fallback[index];
+
+            index++;
+        }
+
+        tfb_menu_state
+            .alternate_os_name[index] =
+            '\0';
+
+        tfb_menu_state
+            .alternate_os_configured = 0;
+    }
+}
+
+
+static int tfb_menu_condition_visible(
+    int condition
+) {
+    if (
+        condition
+        == TFB_CONDITION_ALWAYS
+    ) {
+        return 1;
+    }
+
+    if (
+        condition
+        == TFB_CONDITION_FULL_AB
+    ) {
+        return (
+            tfb_menu_state
+            .full_ab
+            != 0
+        );
+    }
+
+    if (
+        condition
+        == TFB_CONDITION_ALTERNATE_OS_CONFIGURED
+    ) {
+        return (
+            tfb_menu_state
+            .alternate_os_configured
+            != 0
+        );
+    }
+
+    if (
+        condition
+        == TFB_CONDITION_ROOT_INSTALLED
+    ) {
+        return (
+            tfb_menu_state
+            .root_installed
+            != 0
+        );
+    }
+
+    if (
+        condition
+        == TFB_CONDITION_ROOT_NOT_INSTALLED
+    ) {
+        return (
+            tfb_menu_state
+            .root_installed
+            == 0
+        );
+    }
+
+    return 0;
+}
+
+
+
+static int tfb_menu_visible_count(
+    const struct tfb_menu_page *page
+) {
+    if (!page) {
+        return 0;
+    }
+
+    int count = 0;
+
+    for (
+        int index = 0;
+        index < page->entry_count;
+        index++
+    ) {
+        if (
+            tfb_menu_condition_visible(
+                page->entries[
+                    index
+                ].condition
+            )
+        ) {
+            count++;
+        }
+    }
+
+    return count;
+}
+
+
+static const struct tfb_menu_entry *
+tfb_menu_visible_entry(
+    const struct tfb_menu_page *page,
+    int visible_index
+) {
+    if (
+        !page
+        || visible_index < 0
+    ) {
+        return 0;
+    }
+
+    int visible = 0;
+
+    for (
+        int index = 0;
+        index < page->entry_count;
+        index++
+    ) {
+        const struct tfb_menu_entry *entry = (
+            &page->entries[
+                index
+            ]
+        );
+
+        if (
+            !tfb_menu_condition_visible(
+                entry->condition
+            )
+        ) {
+            continue;
+        }
+
+        if (
+            visible
+            == visible_index
+        ) {
+            return entry;
+        }
+
+        visible++;
+    }
+
+    return 0;
+}
+
+
+static int tfb_menu_default_selection(
+    const struct tfb_menu_page *page
+) {
+    if (!page) {
+        return 0;
+    }
+
+    int visible = 0;
+
+    for (
+        int index = 0;
+        index < page->entry_count;
+        index++
+    ) {
+        const struct tfb_menu_entry *entry = (
+            &page->entries[
+                index
+            ]
+        );
+
+        if (
+            !tfb_menu_condition_visible(
+                entry->condition
+            )
+        ) {
+            continue;
+        }
+
+        if (
+            index
+            == page->default_entry_index
+        ) {
+            return visible;
+        }
+
+        visible++;
+    }
+
+    return 0;
+}
+
+
+static int tfb_menu_move_selection(
+    const struct tfb_menu_page *page,
+    int selected,
+    int delta
+) {
+    int count = (
+        tfb_menu_visible_count(
+            page
+        )
+    );
+
+    if (count <= 0) {
+        return 0;
+    }
+
+    if (
+        selected < 0
+        || selected >= count
+    ) {
+        selected = 0;
+    }
+
+    selected += delta;
+
+    while (selected < 0) {
+        selected += count;
+    }
+
+    while (selected >= count) {
+        selected -= count;
+    }
+
+    return selected;
+}
+
+
+static const char *tfb_menu_entry_label(
+    const struct tfb_menu_entry *entry
+) {
+
+    if (
+        entry->label_state
+        == TFB_LABEL_STATE_ALTERNATE_OS_NAME
+    ) {
+        return (
+            tfb_menu_state
+            .alternate_os_name
+        );
+    }
+
+
+    if (!entry) {
         return "";
     }
 
-    return items[index];
+    if (
+        entry->label_state
+        != TFB_LABEL_STATE_ROOT_PERSISTENCE
+    ) {
+        return entry->label;
+    }
+
+    static char state_label[96];
+
+    usize position = 0;
+
+    while (
+        entry->label[
+            position
+        ] != '\0'
+        && position < 88
+    ) {
+        state_label[
+            position
+        ] = entry->label[
+            position
+        ];
+
+        position++;
+    }
+
+    const char *suffix = (
+        tfb_menu_state
+        .root_persistence_enabled
+        ? " [ON]"
+        : " [OFF]"
+    );
+
+    usize suffix_index = 0;
+
+    while (
+        suffix[
+            suffix_index
+        ] != '\0'
+        && position < 95
+    ) {
+        state_label[
+            position
+        ] = suffix[
+            suffix_index
+        ];
+
+        position++;
+        suffix_index++;
+    }
+
+    state_label[
+        position
+    ] = '\0';
+
+    return state_label;
 }
 
 
-static const char *pp_countdown_line(void) {
-    return "WAITING FOR SELECTION";
-}
-
-
-static void pp_fb_render_menu(
-    int selected
+static const char *tfb_menu_action_name(
+    int action
 ) {
     if (
-        !pp_fb_menu_active
-        || pp_fb_menu_mapped_address < 0
+        action
+        == TFB_ACTION_BOOT_ANDROID_SLOT_A
+    ) {
+        return "boot_android_slot_a";
+    }
+
+    if (
+        action
+        == TFB_ACTION_BOOT_ANDROID_SLOT_B
+    ) {
+        return "boot_android_slot_b";
+    }
+
+    if (
+        action
+        == TFB_ACTION_BOOT_ALTERNATE_OS
+    ) {
+        return "boot_alternate_os";
+    }
+
+    if (
+        action
+        == TFB_ACTION_BOOT_ROOTED_ANDROID
+    ) {
+        return "boot_rooted_android";
+    }
+
+    if (
+        action
+        == TFB_ACTION_INSTALL_ROOT
+    ) {
+        return "install_root";
+    }
+
+    if (
+        action
+        == TFB_ACTION_UNINSTALL_ROOT
+    ) {
+        return "uninstall_root";
+    }
+
+    if (
+        action
+        == TFB_ACTION_TOGGLE_ROOT_PERSISTENCE
+    ) {
+        return "toggle_root_persistence";
+    }
+
+    if (
+        action
+        == TFB_ACTION_REBOOT_BOOTLOADER
+    ) {
+        return "reboot_bootloader";
+    }
+
+    if (
+        action
+        == TFB_ACTION_REBOOT_RECOVERY
+    ) {
+        return "reboot_recovery";
+    }
+
+    if (
+        action
+        == TFB_ACTION_BACK
+    ) {
+        return "back";
+    }
+
+    return "none";
+}
+
+
+
+
+static int tfb_adb_connected(
+    void
+) {
+    long ready = tfb_open(
+        "/dev/treeforge-bootstrap-adb-ready",
+        O_RDONLY
+        | O_NONBLOCK
+    );
+
+    if (ready < 0) {
+        return 0;
+    }
+
+    tfb_close(
+        ready
+    );
+
+    long fd = tfb_open(
+        "/sys/class/udc/"
+        "11210000.dwc3/state",
+        O_RDONLY
+        | O_NONBLOCK
+    );
+
+    if (fd < 0) {
+        return 0;
+    }
+
+    char state[32];
+
+    long amount = tfb_syscall3(
+        SYS_READ,
+        fd,
+        (long) state,
+        (long) (
+            sizeof(state) - 1
+        )
+    );
+
+    tfb_close(
+        fd
+    );
+
+    if (amount <= 0) {
+        return 0;
+    }
+
+    state[amount] = '\0';
+
+    static const char configured[] =
+        "configured";
+
+    for (
+        usize index = 0;
+        configured[index] != '\0';
+        index++
+    ) {
+        if (
+            index >= (usize) amount
+            || state[index]
+                != configured[index]
+        ) {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+
+static const char *tfb_menu_status_line(
+    const struct tfb_menu_page *page,
+    u32 elapsed_ms,
+    int timeout_fired
+) {
+    if (tfb_menu_status) {
+        return tfb_menu_status;
+    }
+
+    if (
+        !page
+        || page->timeout_ms == 0
+        || timeout_fired
+    ) {
+        return "WAITING FOR SELECTION";
+    }
+
+    static char line[48];
+
+    static const char prefix[] =
+        "AUTO ACTION IN ";
+
+    usize position = 0;
+
+    while (
+        prefix[position] != '\0'
+        && position < 40
+    ) {
+        line[position] =
+            prefix[position];
+
+        position++;
+    }
+
+    u32 remaining_ms = (
+        page->timeout_ms
+        > elapsed_ms
+        ? page->timeout_ms
+            - elapsed_ms
+        : 0
+    );
+
+    u32 seconds = (
+        remaining_ms
+        + 999U
+    ) / 1000U;
+
+    if (seconds > 99U) {
+        seconds = 99U;
+    }
+
+    if (seconds >= 10U) {
+        line[position++] = (
+            (char) (
+                '0'
+                + (
+                    seconds / 10U
+                )
+            )
+        );
+    }
+
+    line[position++] = (
+        (char) (
+            '0'
+            + (
+                seconds % 10U
+            )
+        )
+    );
+
+    line[position++] = 'S';
+    line[position] = '\0';
+
+    return line;
+}
+
+
+
+/*
+ * TFB_LANDSCAPE_MENU_RENDERER_V17
+ *
+ * Everything below is a TreeForge-owned software presentation layer.
+ * tfb_fb_fill_rect() remains the raw 1600x2560 framebuffer primitive.
+ */
+
+struct tfb_ui_menu_geometry {
+    u32 x;
+    u32 y;
+    u32 width;
+    u32 row_height;
+    u32 row_gap;
+    int item_count;
+};
+
+
+static int tfb_ui_landscape_supported(
+    void
+) {
+    return (
+        tfb_fb_menu_width
+            == TFB_UI_LOGICAL_HEIGHT
+        && tfb_fb_menu_height
+            == TFB_UI_LOGICAL_WIDTH
+    );
+}
+
+
+static void tfb_ui_fill_rect(
+    u32 x,
+    u32 y,
+    u32 width,
+    u32 height,
+    u32 pixel
+) {
+    if (
+        !tfb_ui_landscape_supported()
+        || width == 0
+        || height == 0
+        || x >= TFB_UI_LOGICAL_WIDTH
+        || y >= TFB_UI_LOGICAL_HEIGHT
     ) {
         return;
     }
 
-    const u32 background = 0x00000000U;
-    const u32 foreground = 0x00ffffffU;
-    const u32 inactive = 0x00282828U;
-
-    pp_fb_fill_rect(
-        0,
-        0,
-        pp_fb_menu_width,
-        pp_fb_menu_height,
-        background
-    );
-
-    u32 scale = (
-        pp_fb_menu_width
-        / 160U
-    );
-
-    u32 height_scale = (
-        pp_fb_menu_height
-        / 220U
-    );
-
-    if (height_scale < scale) {
-        scale = height_scale;
+    if (
+        width
+        > TFB_UI_LOGICAL_WIDTH - x
+    ) {
+        width =
+            TFB_UI_LOGICAL_WIDTH - x;
     }
 
-    if (scale < 2U) {
-        scale = 2U;
+    if (
+        height
+        > TFB_UI_LOGICAL_HEIGHT - y
+    ) {
+        height =
+            TFB_UI_LOGICAL_HEIGHT - y;
     }
 
-    if (scale > 8U) {
-        scale = 8U;
+    /*
+     * Logical camera-top landscape -> native portrait scanout.
+     *
+     * This is a 90-degree clockwise TreeForge UI transform.
+     */
+    u32 raw_x =
+        y;
+
+    u32 raw_y = (
+        TFB_UI_LOGICAL_WIDTH
+        - x
+        - width
+    );
+
+    tfb_fb_fill_rect(
+        raw_x,
+        raw_y,
+        height,
+        width,
+        pixel
+    );
+}
+
+
+static void tfb_ui_outline_rect(
+    u32 x,
+    u32 y,
+    u32 width,
+    u32 height,
+    u32 thickness,
+    u32 pixel
+) {
+    if (
+        thickness == 0
+        || width < thickness * 2U
+        || height < thickness * 2U
+    ) {
+        return;
     }
 
-    static const char title[] =
-        "TREEFORGE MENU";
-
-    static const char subtitle[] =
-        "STANDALONE MAINTENANCE";
-
-    u32 title_width = (
-        pp_fb_text_width(
-            title,
-            scale
-        )
+    tfb_ui_fill_rect(
+        x,
+        y,
+        width,
+        thickness,
+        pixel
     );
 
-    u32 title_x = (
-        pp_fb_menu_width > title_width
-        ? (
-            pp_fb_menu_width
-            - title_width
-        ) / 2U
-        : 0
+    tfb_ui_fill_rect(
+        x,
+        y + height - thickness,
+        width,
+        thickness,
+        pixel
     );
 
-    u32 subtitle_width = (
-        pp_fb_text_width(
-            subtitle,
-            scale
-        )
+    tfb_ui_fill_rect(
+        x,
+        y,
+        thickness,
+        height,
+        pixel
     );
 
-    u32 subtitle_x = (
-        pp_fb_menu_width > subtitle_width
-        ? (
-            pp_fb_menu_width
-            - subtitle_width
-        ) / 2U
-        : 0
+    tfb_ui_fill_rect(
+        x + width - thickness,
+        y,
+        thickness,
+        height,
+        pixel
     );
+}
 
-    int item_count =
-        pp_menu_item_count();
 
-    u32 row_height =
-        13U * scale;
+static void tfb_ui_draw_char(
+    u32 x,
+    u32 y,
+    char value,
+    u32 scale,
+    u32 pixel
+) {
+    for (
+        int row = 0;
+        row < 7;
+        row++
+    ) {
+        unsigned char bits = (
+            tfb_fb_glyph_row(
+                value,
+                row
+            )
+        );
 
-    u32 row_gap =
-        4U * scale;
+        for (
+            int column = 0;
+            column < 5;
+            column++
+        ) {
+            if (
+                bits
+                & (
+                    1U
+                    << (
+                        4
+                        - column
+                    )
+                )
+            ) {
+                tfb_ui_fill_rect(
+                    x
+                        + (
+                            (u32) column
+                            * scale
+                        ),
+                    y
+                        + (
+                            (u32) row
+                            * scale
+                        ),
+                    scale,
+                    scale,
+                    pixel
+                );
+            }
+        }
+    }
+}
 
-    u32 total_rows = (
-        row_height
-        * (u32) item_count
-        + row_gap
-        * (u32) (
-            item_count - 1
-        )
-    );
 
-    u32 rows_y = (
-        pp_fb_menu_height > total_rows
-        ? (
-            pp_fb_menu_height
-            - total_rows
-        ) / 2U
-        : 0
-    );
+static void tfb_ui_draw_text(
+    u32 x,
+    u32 y,
+    const char *value,
+    u32 scale,
+    u32 pixel
+) {
+    if (
+        !value
+        || scale == 0
+    ) {
+        return;
+    }
 
-    u32 title_y = (
-        rows_y > 42U * scale
-        ? rows_y - 42U * scale
-        : scale
-    );
-
-    pp_fb_draw_text(
-        title_x,
-        title_y,
-        title,
-        scale,
-        foreground
-    );
-
-    u32 version_width = (
-        pp_fb_text_width(
-            pp_version,
-            scale
-        )
-    );
-
-    u32 version_x = (
-        pp_fb_menu_width > version_width
-        ? (
-            pp_fb_menu_width
-            - version_width
-        ) / 2U
-        : 0
-    );
-
-    pp_fb_draw_text(
-        version_x,
-        title_y + 10U * scale,
-        pp_version,
-        scale,
-        foreground
-    );
-
-    pp_fb_draw_text(
-        subtitle_x,
-        title_y + 20U * scale,
-        subtitle,
-        scale,
-        foreground
-    );
-
-    u32 box_x =
-        pp_fb_menu_width / 10U;
-
-    u32 box_width = (
-        pp_fb_menu_width
-        - box_x * 2U
-    );
+    u32 cursor =
+        x;
 
     for (
-        int index = 0;
-        index < item_count;
+        usize index = 0;
+        value[index] != '\0';
         index++
     ) {
-        u32 row_y = (
-            rows_y
-            + (
-                (u32) index
-                * (
-                    row_height
-                    + row_gap
+        if (
+            value[index]
+            != ' '
+        ) {
+            tfb_ui_draw_char(
+                cursor,
+                y,
+                value[index],
+                scale,
+                pixel
+            );
+        }
+
+        cursor +=
+            6U * scale;
+    }
+}
+
+
+static void tfb_ui_draw_text_fit(
+    u32 x,
+    u32 y,
+    const char *value,
+    u32 maximum_width,
+    u32 preferred_scale,
+    u32 minimum_scale,
+    u32 pixel
+) {
+    if (!value) {
+        return;
+    }
+
+    u32 scale =
+        preferred_scale;
+
+    while (
+        scale > minimum_scale
+        && tfb_fb_text_width(
+            value,
+            scale
+        ) > maximum_width
+    ) {
+        scale--;
+    }
+
+    tfb_ui_draw_text(
+        x,
+        y,
+        value,
+        scale,
+        pixel
+    );
+}
+
+
+static int tfb_ui_marker_exists(
+    const char *path
+) {
+    long fd = tfb_open(
+        path,
+        O_RDONLY
+        | O_NONBLOCK
+    );
+
+    if (fd < 0) {
+        return 0;
+    }
+
+    tfb_close(
+        fd
+    );
+
+    return 1;
+}
+
+
+static int tfb_ui_read_u64(
+    const char *path,
+    u64 *output
+) {
+    char buffer[48];
+
+    if (
+        !output
+        || !tfb_menu_read_state_text(
+            path,
+            buffer,
+            sizeof(buffer)
+        )
+    ) {
+        return 0;
+    }
+
+    u64 value = 0;
+    int seen = 0;
+
+    for (
+        usize index = 0;
+        buffer[index] != '\0';
+        index++
+    ) {
+        char c =
+            buffer[index];
+
+        if (
+            c < '0'
+            || c > '9'
+        ) {
+            return 0;
+        }
+
+        seen = 1;
+
+        value = (
+            value * 10ULL
+            + (u64) (
+                c - '0'
+            )
+        );
+    }
+
+    if (!seen) {
+        return 0;
+    }
+
+    *output =
+        value;
+
+    return 1;
+}
+
+
+static void tfb_ui_u64_text(
+    u64 value,
+    char *output,
+    usize capacity
+) {
+    if (
+        !output
+        || capacity < 2
+    ) {
+        return;
+    }
+
+    char reverse[32];
+    usize count = 0;
+
+    do {
+        reverse[count++] = (
+            (char) (
+                '0'
+                + (
+                    value
+                    % 10ULL
                 )
             )
         );
 
-        int active = (
-            index == selected
-        );
+        value /=
+            10ULL;
 
-        pp_fb_fill_rect(
-            box_x,
-            row_y,
-            box_width,
-            row_height,
-            active
-            ? foreground
-            : inactive
-        );
+    } while (
+        value > 0
+        && count
+            < sizeof(reverse)
+    );
 
-        const char *item =
-            pp_menu_item(index);
-
-        u32 item_scale =
-            scale;
-
-        u32 available_width = (
-            box_width > 4U * scale
-            ? box_width - 4U * scale
-            : box_width
-        );
-
-        while (
-            item_scale > 2U
-            && pp_fb_text_width(
-                item,
-                item_scale
-            ) > available_width
-        ) {
-            item_scale--;
-        }
-
-        u32 text_width = (
-            pp_fb_text_width(
-                item,
-                item_scale
-            )
-        );
-
-        u32 text_x = (
-            pp_fb_menu_width > text_width
-            ? (
-                pp_fb_menu_width
-                - text_width
-            ) / 2U
-            : box_x
-        );
-
-        u32 glyph_height =
-            7U * item_scale;
-
-        u32 text_y = (
-            row_y
-            + (
-                row_height > glyph_height
-                ? (
-                    row_height
-                    - glyph_height
-                ) / 2U
-                : 0
-            )
-        );
-
-        pp_fb_draw_text(
-            text_x,
-            text_y,
-            item,
-            item_scale,
-            active
-            ? background
-            : foreground
-        );
-    }
-
-    const char *status =
-        pp_countdown_line();
-
-    u32 status_scale =
-        scale;
+    usize position = 0;
 
     while (
-        status_scale > 2U
-        && pp_fb_text_width(
-            status,
-            status_scale
-        ) > box_width
+        count > 0
+        && position + 1
+            < capacity
     ) {
-        status_scale--;
+        output[position++] =
+            reverse[--count];
     }
 
-    u32 status_width = (
-        pp_fb_text_width(
-            status,
-            status_scale
+    output[position] =
+        '\0';
+}
+
+
+static void tfb_ui_append(
+    char *buffer,
+    usize capacity,
+    const char *suffix
+) {
+    if (
+        !buffer
+        || !suffix
+        || capacity < 2
+    ) {
+        return;
+    }
+
+    usize position =
+        tfb_strlen(
+            buffer
+        );
+
+    for (
+        usize index = 0;
+        suffix[index] != '\0'
+        && position + 1
+            < capacity;
+        index++
+    ) {
+        buffer[position++] =
+            suffix[index];
+    }
+
+    buffer[position] =
+        '\0';
+}
+
+
+/*
+ * TFB_BOOTCONFIG_SLOT_DETECTION_V17_1A
+ *
+ * Modern Pixel boot parameters live in /proc/bootconfig, e.g.
+ *
+ *     androidboot.slot_suffix = "_a"
+ *
+ * Keep /proc/cmdline as a compatibility fallback.
+ */
+static int tfb_ui_file_contains(
+    const char *path,
+    const char *needle
+) {
+    if (
+        !path
+        || !needle
+        || needle[0] == '\0'
+    ) {
+        return 0;
+    }
+
+    long fd = tfb_open(
+        path,
+        O_RDONLY
+        | O_NONBLOCK
+    );
+
+    if (fd < 0) {
+        return 0;
+    }
+
+    usize matched = 0;
+    char buffer[512];
+
+    for (;;) {
+        long amount = tfb_syscall3(
+            SYS_READ,
+            fd,
+            (long) buffer,
+            (long) sizeof(buffer)
+        );
+
+        if (amount <= 0) {
+            break;
+        }
+
+        for (
+            long index = 0;
+            index < amount;
+            index++
+        ) {
+            char value =
+                buffer[index];
+
+            if (
+                value
+                == needle[matched]
+            ) {
+                matched++;
+
+                if (
+                    needle[matched]
+                    == '\0'
+                ) {
+                    tfb_close(
+                        fd
+                    );
+
+                    return 1;
+                }
+
+                continue;
+            }
+
+            matched = (
+                value == needle[0]
+                ? 1U
+                : 0U
+            );
+        }
+    }
+
+    tfb_close(
+        fd
+    );
+
+    return 0;
+}
+
+
+static const char *tfb_ui_boot_slot(
+    void
+) {
+    if (
+        tfb_ui_file_contains(
+            "/proc/bootconfig",
+            "androidboot.slot_suffix = \"_a\""
+        )
+        || tfb_ui_file_contains(
+            "/proc/bootconfig",
+            "androidboot.slot_suffix=\"_a\""
+        )
+    ) {
+        return "A";
+    }
+
+    if (
+        tfb_ui_file_contains(
+            "/proc/bootconfig",
+            "androidboot.slot_suffix = \"_b\""
+        )
+        || tfb_ui_file_contains(
+            "/proc/bootconfig",
+            "androidboot.slot_suffix=\"_b\""
+        )
+    ) {
+        return "B";
+    }
+
+    /*
+     * Compatibility fallback for platforms that still expose
+     * androidboot.slot_suffix directly in the kernel command line.
+     */
+    if (
+        tfb_ui_file_contains(
+            "/proc/cmdline",
+            "androidboot.slot_suffix=_a"
+        )
+    ) {
+        return "A";
+    }
+
+    if (
+        tfb_ui_file_contains(
+            "/proc/cmdline",
+            "androidboot.slot_suffix=_b"
+        )
+    ) {
+        return "B";
+    }
+
+    return "UNKNOWN";
+}
+
+
+static int tfb_ui_menu_geometry(
+    const struct tfb_menu_page *page,
+    struct tfb_ui_menu_geometry *geometry
+) {
+    if (
+        !page
+        || !geometry
+    ) {
+        return 0;
+    }
+
+    int item_count = (
+        tfb_menu_visible_count(
+            page
         )
     );
 
-    u32 status_x = (
-        pp_fb_menu_width > status_width
-        ? (
-            pp_fb_menu_width
-            - status_width
-        ) / 2U
+    if (item_count <= 0) {
+        return 0;
+    }
+
+    u32 width = (
+        TFB_UI_LOGICAL_WIDTH
+        - TFB_UI_MENU_X
+        - TFB_UI_MENU_RIGHT_MARGIN
+    );
+
+    u32 usable_height = (
+        TFB_UI_CONTENT_BOTTOM
+        - TFB_UI_CONTENT_TOP
+    );
+
+    u32 gaps = (
+        item_count > 1
+        ? TFB_UI_ROW_GAP
+            * (u32) (
+                item_count - 1
+            )
         : 0
     );
 
-    u32 status_y = (
-        rows_y
-        + total_rows
-        + 12U * scale
+    u32 row_height = (
+        usable_height > gaps
+        ? (
+            usable_height
+            - gaps
+        ) / (u32) item_count
+        : 96U
+    );
+
+    if (row_height > 180U) {
+        row_height = 180U;
+    }
+
+    if (row_height < 96U) {
+        row_height = 96U;
+    }
+
+    u32 total_height = (
+        row_height
+        * (u32) item_count
+        + gaps
+    );
+
+    u32 y = (
+        TFB_UI_CONTENT_TOP
+        + (
+            usable_height
+                > total_height
+            ? (
+                usable_height
+                - total_height
+            ) / 2U
+            : 0
+        )
+    );
+
+    geometry->x =
+        TFB_UI_MENU_X;
+
+    geometry->y =
+        y;
+
+    geometry->width =
+        width;
+
+    geometry->row_height =
+        row_height;
+
+    geometry->row_gap =
+        TFB_UI_ROW_GAP;
+
+    geometry->item_count =
+        item_count;
+
+    return 1;
+}
+
+
+static void tfb_ui_draw_kv(
+    u32 x,
+    u32 y,
+    const char *label,
+    const char *value,
+    u32 label_pixel,
+    u32 value_pixel
+) {
+    tfb_ui_draw_text(
+        x,
+        y,
+        label,
+        3U,
+        label_pixel
+    );
+
+    tfb_ui_draw_text_fit(
+        x + 410U,
+        y,
+        value,
+        550U,
+        3U,
+        2U,
+        value_pixel
+    );
+}
+
+
+static void tfb_ui_draw_boot_state(
+    u32 x,
+    u32 y,
+    const char *label,
+    const char *state,
+    u32 state_pixel
+) {
+    tfb_ui_draw_text(
+        x,
+        y,
+        label,
+        3U,
+        0x00dbe7efU
+    );
+
+    tfb_ui_draw_text_fit(
+        x + 570U,
+        y,
+        state,
+        390U,
+        3U,
+        2U,
+        state_pixel
+    );
+}
+
+
+
+
+/*
+ * TFB_MENU_CARD_METADATA_V17_1
+ *
+ * Icons are semantic identities carried by the menu profile.
+ * These compact built-in badges are the always-available fallback.
+ * Rich artwork may later be supplied by the boot.img asset provider.
+ */
+static const char *tfb_menu_icon_badge(
+    int icon
+) {
+    if (icon == TFB_MENU_ICON_ANDROID) {
+        return "A";
+    }
+
+    if (icon == TFB_MENU_ICON_RECOVERY) {
+        return "R";
+    }
+
+    if (icon == TFB_MENU_ICON_MAINTENANCE) {
+        return "M";
+    }
+
+    if (icon == TFB_MENU_ICON_ALTERNATE_OS) {
+        return "O";
+    }
+
+    if (icon == TFB_MENU_ICON_ROOT) {
+        return "R";
+    }
+
+    if (
+        icon
+        == TFB_MENU_ICON_PIXEL_PARTITIONER
+    ) {
+        return "P";
+    }
+
+    if (icon == TFB_MENU_ICON_BOOTLOADER) {
+        return "B";
+    }
+
+    if (icon == TFB_MENU_ICON_BACK) {
+        return "B";
+    }
+
+    return "";
+}
+
+
+static void tfb_ui_draw_menu_icon(
+    int icon,
+    u32 x,
+    u32 y,
+    int active,
+    u32 accent,
+    u32 foreground,
+    u32 dim
+) {
+    const u32 size =
+        96U;
+
+    const u32 pixel = (
+        active
+        ? accent
+        : dim
+    );
+
+    tfb_ui_outline_rect(
+        x,
+        y,
+        size,
+        size,
+        active
+            ? 5U
+            : 3U,
+        pixel
+    );
+
+    const char *badge = (
+        tfb_menu_icon_badge(
+            icon
+        )
     );
 
     if (
-        status_y
-        + 7U * status_scale
-        < pp_fb_menu_height
+        !badge
+        || badge[0] == '\0'
     ) {
-        pp_fb_draw_text(
-            status_x,
-            status_y,
-            status,
-            status_scale,
-            foreground
+        return;
+    }
+
+    u32 scale =
+        5U;
+
+    u32 width = (
+        tfb_fb_text_width(
+            badge,
+            scale
+        )
+    );
+
+    u32 text_x = (
+        x
+        + (
+            size > width
+            ? (
+                size - width
+            ) / 2U
+            : 0U
+        )
+    );
+
+    tfb_ui_draw_text(
+        text_x,
+        y + 30U,
+        badge,
+        scale,
+        active
+            ? accent
+            : foreground
+    );
+}
+
+
+/*
+ * ================================================================
+ * TFB_DIRTY_REGION_REDRAW_V17_1C
+ * ================================================================
+ *
+ * The framebuffer bridge exposes a directly mapped scanout.
+ * Repainting the complete 1600x2560 surface for every key or touch
+ * event causes a visible flash.
+ *
+ * Full redraw remains correct for initial display and page changes.
+ * Stable-page changes repaint only their affected logical regions.
+ */
+
+#define TFB_REDRAW_FULL       0x01
+#define TFB_REDRAW_SELECTION  0x02
+#define TFB_REDRAW_STATUS     0x04
+#define TFB_REDRAW_ADB        0x08
+
+
+static void tfb_fb_render_menu_card(
+    const struct tfb_menu_page *page,
+    int index,
+    int active
+) {
+    if (
+        !page
+        || index < 0
+    ) {
+        return;
+    }
+
+    struct tfb_ui_menu_geometry
+        geometry;
+
+    if (
+        !tfb_ui_menu_geometry(
+            page,
+            &geometry
+        )
+        || index >= geometry.item_count
+    ) {
+        return;
+    }
+
+    const u32 card =
+        0x00121f2cU;
+
+    const u32 card_selected =
+        0x00132635U;
+
+    const u32 foreground =
+        0x00f4f8fbU;
+
+    const u32 dim =
+        0x008ca0b0U;
+
+    const u32 border =
+        0x00283d4dU;
+
+    const u32 accent =
+        0x0000d4eeU;
+
+    u32 row_y = (
+        geometry.y
+        + (
+            (u32) index
+            * (
+                geometry.row_height
+                + geometry.row_gap
+            )
+        )
+    );
+
+    tfb_ui_fill_rect(
+        geometry.x,
+        row_y,
+        geometry.width,
+        geometry.row_height,
+        active
+            ? card_selected
+            : card
+    );
+
+    tfb_ui_outline_rect(
+        geometry.x,
+        row_y,
+        geometry.width,
+        geometry.row_height,
+        active
+            ? 6U
+            : 3U,
+        active
+            ? accent
+            : border
+    );
+
+    if (active) {
+        tfb_ui_fill_rect(
+            geometry.x,
+            row_y,
+            18U,
+            geometry.row_height,
+            accent
         );
     }
+
+    const struct tfb_menu_entry
+        *entry = (
+            tfb_menu_visible_entry(
+                page,
+                index
+            )
+        );
+
+    const char *label = (
+        tfb_menu_entry_label(
+            entry
+        )
+    );
+
+    const char *description = (
+        entry
+        ? entry->description
+        : ""
+    );
+
+    u32 icon_x =
+        geometry.x + 48U;
+
+    u32 icon_y = (
+        row_y
+        + (
+            geometry.row_height > 96U
+            ? (
+                geometry.row_height
+                - 96U
+            ) / 2U
+            : 0U
+        )
+    );
+
+    tfb_ui_draw_menu_icon(
+        entry
+            ? entry->icon
+            : TFB_MENU_ICON_NONE,
+        icon_x,
+        icon_y,
+        active,
+        accent,
+        foreground,
+        dim
+    );
+
+    u32 text_x =
+        geometry.x + 190U;
+
+    tfb_ui_draw_text_fit(
+        text_x,
+        row_y + 38U,
+        label,
+        geometry.width - 245U,
+        5U,
+        3U,
+        active
+            ? accent
+            : foreground
+    );
+
+    tfb_ui_draw_text_fit(
+        text_x,
+        row_y + 102U,
+        description,
+        geometry.width - 245U,
+        3U,
+        2U,
+        dim
+    );
 }
 
-static void pp_output(
+
+static void tfb_fb_render_selection_delta(
+    const struct tfb_menu_page *page,
+    int old_selected,
+    int new_selected
+) {
+    if (
+        !page
+        || old_selected == new_selected
+    ) {
+        return;
+    }
+
+    tfb_fb_render_menu_card(
+        page,
+        old_selected,
+        0
+    );
+
+    tfb_fb_render_menu_card(
+        page,
+        new_selected,
+        1
+    );
+}
+
+
+static void tfb_fb_render_status_region(
+    const struct tfb_menu_page *page,
+    u32 elapsed_ms,
+    int timeout_fired
+) {
+    if (!page) {
+        return;
+    }
+
+    struct tfb_ui_menu_geometry
+        geometry;
+
+    if (
+        !tfb_ui_menu_geometry(
+            page,
+            &geometry
+        )
+    ) {
+        return;
+    }
+
+    const u32 background =
+        0x00060b12U;
+
+    const u32 dim =
+        0x008ca0b0U;
+
+    /*
+     * Clear only the footer/status strip.
+     */
+    tfb_ui_fill_rect(
+        geometry.x,
+        1468U,
+        geometry.width,
+        76U,
+        background
+    );
+
+    tfb_ui_draw_text_fit(
+        geometry.x,
+        1490U,
+        tfb_menu_status_line(
+            page,
+            elapsed_ms,
+            timeout_fired
+        ),
+        geometry.width,
+        3U,
+        2U,
+        dim
+    );
+}
+
+
+static void tfb_fb_render_adb_region(
+    void
+) {
+    /*
+     * These coordinates are the stable SYSTEM/ADB row inside the
+     * fixed V17 landscape information panel.
+     */
+    const u32 x =
+        165U;
+
+    const u32 y =
+        1239U;
+
+    const u32 panel =
+        0x000c1621U;
+
+    const u32 dim =
+        0x008ca0b0U;
+
+    const u32 green =
+        0x004ed87dU;
+
+    const u32 warning =
+        0x00e4c45cU;
+
+    tfb_ui_fill_rect(
+        x - 8U,
+        y - 10U,
+        970U,
+        48U,
+        panel
+    );
+
+    int connected =
+        tfb_adb_connected();
+
+    tfb_ui_draw_kv(
+        x,
+        y,
+        "ADB",
+        connected
+            ? "CONNECTED"
+            : "WAITING",
+        dim,
+        connected
+            ? green
+            : warning
+    );
+}
+
+
+static void tfb_fb_render_menu(
+    const struct tfb_menu_page *page,
+    int selected,
+    u32 elapsed_ms,
+    int timeout_fired
+) {
+    if (
+        !tfb_fb_menu_active
+        || tfb_fb_menu_mapped_address < 0
+        || !page
+    ) {
+        return;
+    }
+
+    const u32 background =
+        0x00060b12U;
+
+    const u32 panel =
+        0x000c1621U;
+
+    const u32 foreground =
+        0x00f4f8fbU;
+
+    const u32 dim =
+        0x008ca0b0U;
+
+    const u32 border =
+        0x00283d4dU;
+
+    const u32 accent =
+        0x0000d4eeU;
+
+    const u32 green =
+        0x004ed87dU;
+
+    const u32 warning =
+        0x00e4c45cU;
+
+    /*
+     * Keep an explicit degraded fallback rather than ever attempting
+     * a guessed transform on an unknown framebuffer geometry.
+     */
+    if (
+        !tfb_ui_landscape_supported()
+    ) {
+        tfb_fb_fill_rect(
+            0,
+            0,
+            tfb_fb_menu_width,
+            tfb_fb_menu_height,
+            0x00000000U
+        );
+
+        tfb_fb_draw_text(
+            24U,
+            24U,
+            "TREEFORGE LANDSCAPE GEOMETRY UNSUPPORTED",
+            3U,
+            0x00ffffffU
+        );
+
+        return;
+    }
+
+    tfb_fb_fill_rect(
+        0,
+        0,
+        tfb_fb_menu_width,
+        tfb_fb_menu_height,
+        background
+    );
+
+    /*
+     * Header.
+     */
+    tfb_ui_draw_text(
+        110U,
+        72U,
+        "TREEFORGE",
+        8U,
+        accent
+    );
+
+    tfb_ui_draw_text(
+        110U,
+        150U,
+        "BOOT MANAGER",
+        5U,
+        foreground
+    );
+
+    tfb_ui_draw_text(
+        110U,
+        215U,
+        "PIXEL TABLET / TANGORPRO / GS201",
+        3U,
+        dim
+    );
+
+    /*
+     * Pixel Tablet physical controls live on the top-right edge.
+     * The arrows point toward the real buttons.
+     */
+    tfb_ui_draw_text(
+        1840U,
+        28U,
+        "^",
+        5U,
+        accent
+    );
+
+    tfb_ui_draw_text(
+        2040U,
+        28U,
+        "^",
+        5U,
+        accent
+    );
+
+    tfb_ui_draw_text(
+        2295U,
+        28U,
+        "^",
+        5U,
+        accent
+    );
+
+    tfb_ui_draw_text(
+        1780U,
+        92U,
+        "VOL -",
+        3U,
+        foreground
+    );
+
+    tfb_ui_draw_text(
+        1970U,
+        92U,
+        "VOL +",
+        3U,
+        foreground
+    );
+
+    tfb_ui_draw_text(
+        2230U,
+        92U,
+        "POWER",
+        3U,
+        foreground
+    );
+
+    /*
+     * Left information panel.
+     */
+    const u32 left_x =
+        110U;
+
+    const u32 left_y =
+        300U;
+
+    const u32 left_width =
+        1080U;
+
+    const u32 left_height =
+        1130U;
+
+    tfb_ui_fill_rect(
+        left_x,
+        left_y,
+        left_width,
+        left_height,
+        panel
+    );
+
+    tfb_ui_outline_rect(
+        left_x,
+        left_y,
+        left_width,
+        left_height,
+        4U,
+        border
+    );
+
+    u32 ix =
+        left_x + 55U;
+
+    u32 iy =
+        left_y + 45U;
+
+    tfb_ui_draw_text(
+        ix,
+        iy,
+        "DEVICE",
+        4U,
+        accent
+    );
+
+    iy += 70U;
+
+    tfb_ui_draw_kv(
+        ix,
+        iy,
+        "MODEL",
+        "PIXEL TABLET",
+        dim,
+        foreground
+    );
+
+    iy += 52U;
+
+    tfb_ui_draw_kv(
+        ix,
+        iy,
+        "BOOT MODE",
+        tfb_menu_state.full_ab
+            ? "FULL A/B"
+            : "VIRTUAL A/B",
+        dim,
+        foreground
+    );
+
+    iy += 52U;
+
+    tfb_ui_draw_kv(
+        ix,
+        iy,
+        "BOOT SLOT",
+        tfb_ui_boot_slot(),
+        dim,
+        foreground
+    );
+
+    iy += 78U;
+
+    tfb_ui_draw_text(
+        ix,
+        iy,
+        "HARDWARE",
+        4U,
+        accent
+    );
+
+    iy += 66U;
+
+    char storage_value[32] =
+        "UNKNOWN";
+
+    u64 sectors = 0;
+
+    if (
+        tfb_ui_read_u64(
+            "/sys/class/block/sda/size",
+            &sectors
+        )
+    ) {
+        /*
+         * Linux block size is read from /sys/class/block/sda/size.
+         * The reported size is expressed in 512-byte sectors.
+         * Decimal GB intentionally matches the device's marketed
+         * capacity: this tangorpro reports approximately 128 GB.
+         */
+        u64 bytes =
+            sectors * 512ULL;
+
+        u64 decimal_gb = (
+            bytes
+            + 500000000ULL
+        ) / 1000000000ULL;
+
+        tfb_ui_u64_text(
+            decimal_gb,
+            storage_value,
+            sizeof(storage_value)
+        );
+
+        tfb_ui_append(
+            storage_value,
+            sizeof(storage_value),
+            " GB"
+        );
+    }
+
+    tfb_ui_draw_kv(
+        ix,
+        iy,
+        "STORAGE",
+        storage_value,
+        dim,
+        foreground
+    );
+
+    iy += 52U;
+
+    char battery_value[32] =
+        "UNKNOWN";
+
+    u64 capacity = 0;
+
+    if (
+        tfb_ui_read_u64(
+            "/sys/class/power_supply/battery/capacity",
+            &capacity
+        )
+    ) {
+        tfb_ui_u64_text(
+            capacity,
+            battery_value,
+            sizeof(battery_value)
+        );
+
+        tfb_ui_append(
+            battery_value,
+            sizeof(battery_value),
+            "%"
+        );
+    }
+
+    tfb_ui_draw_kv(
+        ix,
+        iy,
+        "BATTERY",
+        battery_value,
+        dim,
+        foreground
+    );
+
+    iy += 52U;
+
+    char battery_status[32] =
+        "UNKNOWN";
+
+    tfb_menu_read_state_text(
+        "/sys/class/power_supply/battery/status",
+        battery_status,
+        sizeof(battery_status)
+    );
+
+    tfb_ui_draw_kv(
+        ix,
+        iy,
+        "STATE",
+        battery_status,
+        dim,
+        foreground
+    );
+
+    iy += 78U;
+
+    tfb_ui_draw_text(
+        ix,
+        iy,
+        "BOOT INVENTORY",
+        4U,
+        accent
+    );
+
+    iy += 66U;
+
+    tfb_ui_draw_boot_state(
+        ix,
+        iy,
+        "ANDROID SLOT A",
+        "AVAILABLE",
+        green
+    );
+
+    iy += 48U;
+
+    tfb_ui_draw_boot_state(
+        ix,
+        iy,
+        "ANDROID SLOT B",
+        tfb_menu_state.full_ab
+            ? "AVAILABLE"
+            : "N/A VIRTUAL",
+        tfb_menu_state.full_ab
+            ? green
+            : dim
+    );
+
+    iy += 48U;
+
+    tfb_ui_draw_boot_state(
+        ix,
+        iy,
+        "RECOVERY",
+        "NOT IMPLEMENTED",
+        dim
+    );
+
+    iy += 48U;
+
+    tfb_ui_draw_boot_state(
+        ix,
+        iy,
+        "ALTERNATE OS",
+        tfb_menu_state
+            .alternate_os_configured
+            ? tfb_menu_state
+                .alternate_os_name
+            : "NOT INSTALLED",
+        tfb_menu_state
+            .alternate_os_configured
+            ? green
+            : dim
+    );
+
+    iy += 48U;
+
+    tfb_ui_draw_boot_state(
+        ix,
+        iy,
+        "ROOTED ANDROID",
+        tfb_menu_state
+            .root_installed
+            ? "INSTALLED"
+            : "NOT INSTALLED",
+        tfb_menu_state
+            .root_installed
+            ? green
+            : dim
+    );
+
+    iy += 74U;
+
+    tfb_ui_draw_text(
+        ix,
+        iy,
+        "SYSTEM",
+        4U,
+        accent
+    );
+
+    iy += 62U;
+
+    tfb_fb_render_adb_region();
+
+    iy += 48U;
+
+    tfb_ui_draw_kv(
+        ix,
+        iy,
+        "TOUCH",
+        tfb_ui_marker_exists(
+            "/dev/treeforge-bootstrap-touchscreen-ready"
+        )
+            ? "READY"
+            : "DEGRADED",
+        dim,
+        tfb_ui_marker_exists(
+            "/dev/treeforge-bootstrap-touchscreen-ready"
+        )
+            ? green
+            : warning
+    );
+
+    /*
+     * Right menu panel.
+     */
+    struct tfb_ui_menu_geometry geometry;
+
+    if (
+        !tfb_ui_menu_geometry(
+            page,
+            &geometry
+        )
+    ) {
+        tfb_ui_draw_text(
+            TFB_UI_MENU_X,
+            420U,
+            "NO MENU ENTRIES",
+            5U,
+            warning
+        );
+
+        return;
+    }
+
+    tfb_ui_draw_text_fit(
+        geometry.x,
+        205U,
+        page->title,
+        geometry.width,
+        6U,
+        3U,
+        foreground
+    );
+
+    tfb_ui_draw_text_fit(
+        geometry.x,
+        260U,
+        page->subtitle,
+        geometry.width,
+        3U,
+        2U,
+        dim
+    );
+
+    for (
+        int index = 0;
+        index < geometry.item_count;
+        index++
+    ) {
+        tfb_fb_render_menu_card(
+            page,
+            index,
+            index == selected
+        );
+    }
+
+
+    tfb_fb_render_status_region(
+        page,
+        elapsed_ms,
+        timeout_fired
+    );
+
+
+    tfb_ui_draw_text(
+        110U,
+        1510U,
+        tfb_version,
+        3U,
+        dim
+    );
+}
+
+
+static void tfb_output(
     const char *value
 ) {
-    pp_write_all(
-        pp_tty,
+    tfb_write_all(
+        tfb_tty,
         value
     );
 
-    pp_write_all(
-        pp_console,
+    tfb_write_all(
+        tfb_console,
         value
     );
 }
 
-static void pp_log(
+static void tfb_log(
     const char *value
 ) {
-    pp_write_all(
-        pp_kmsg,
-        "<6>pixel_partitioner: "
+    tfb_write_all(
+        tfb_kmsg,
+        "<6>treeforge_bootstrap: "
     );
 
-    pp_write_all(
-        pp_kmsg,
+    tfb_write_all(
+        tfb_kmsg,
         value
     );
 
-    pp_write_all(
-        pp_kmsg,
+    tfb_write_all(
+        tfb_kmsg,
         "\n"
     );
 }
 
 
-static void pp_render(
-    int selected
+static void tfb_render(
+    const struct tfb_menu_page *page,
+    int selected,
+    u32 elapsed_ms,
+    int timeout_fired
 ) {
-    pp_output(
+    if (!page) {
+        return;
+    }
+
+    tfb_output(
         "\033[2J\033[H"
-        "TreeForge Bootstrap\n"
     );
 
-    pp_output(
-        pp_version
+    tfb_output(
+        page->title
     );
 
-    pp_output(
+    tfb_output(
+        "\n"
+    );
+
+    tfb_output(
+        tfb_version
+    );
+
+    tfb_output(
+        "\n"
+    );
+
+    tfb_output(
+        page->subtitle
+    );
+
+    tfb_output(
         "\n\n"
-        "STANDALONE MAINTENANCE\n\n"
     );
 
-    int item_count =
-        pp_menu_item_count();
+    int item_count = (
+        tfb_menu_visible_count(
+            page
+        )
+    );
 
     for (
         int index = 0;
         index < item_count;
         index++
     ) {
-        pp_output(
+        const struct tfb_menu_entry
+            *entry = (
+                tfb_menu_visible_entry(
+                    page,
+                    index
+                )
+            );
+
+        if (!entry) {
+            continue;
+        }
+
+        tfb_output(
             index == selected
             ? "> "
             : "  "
         );
 
-        pp_output(
-            pp_menu_item(
-                index
+        tfb_output(
+            tfb_menu_entry_label(
+                entry
             )
         );
 
-        pp_output(
+        tfb_output(
             "\n"
         );
     }
 
-    pp_output(
+    tfb_output(
         "\n"
         "Volume Up/Down: navigate\n"
         "Power: select\n\n"
     );
 
-    pp_output(
-        pp_countdown_line()
+    tfb_output(
+        tfb_menu_status_line(
+            page,
+            elapsed_ms,
+            timeout_fired
+        )
     );
 
-    pp_output(
+    tfb_output(
         "\n"
     );
 
-    pp_fb_render_menu(
-        selected
+    tfb_fb_render_menu(
+        page,
+        selected,
+        elapsed_ms,
+        timeout_fired
     );
 }
 
-static void pp_fb_draw_management_line(
+
+static void tfb_fb_draw_management_line(
     const char *value,
     u32 y,
     u32 scale,
@@ -1977,14 +4219,14 @@ static void pp_fb_draw_management_line(
     );
 
     u32 available_width = (
-        pp_fb_menu_width > margin
-        ? pp_fb_menu_width - margin
-        : pp_fb_menu_width
+        tfb_fb_menu_width > margin
+        ? tfb_fb_menu_width - margin
+        : tfb_fb_menu_width
     );
 
     while (
         line_scale > 2U
-        && pp_fb_text_width(
+        && tfb_fb_text_width(
             value,
             line_scale
         ) > available_width
@@ -1993,22 +4235,22 @@ static void pp_fb_draw_management_line(
     }
 
     u32 width = (
-        pp_fb_text_width(
+        tfb_fb_text_width(
             value,
             line_scale
         )
     );
 
     u32 x = (
-        pp_fb_menu_width > width
+        tfb_fb_menu_width > width
         ? (
-            pp_fb_menu_width
+            tfb_fb_menu_width
             - width
         ) / 2U
         : 0
     );
 
-    pp_fb_draw_text(
+    tfb_fb_draw_text(
         x,
         y,
         value,
@@ -2018,7 +4260,7 @@ static void pp_fb_draw_management_line(
 }
 
 
-static void pp_event_path(
+static void tfb_event_path(
     int index,
     char *output
 ) {
@@ -2058,7 +4300,7 @@ static void pp_event_path(
     output[position] = '\0';
 }
 
-static void pp_runtime_sysfs_event_dev_path(
+static void tfb_runtime_sysfs_event_dev_path(
     int index,
     char *output
 ) {
@@ -2107,7 +4349,7 @@ static void pp_runtime_sysfs_event_dev_path(
     output[position] = '\0';
 }
 
-static unsigned long pp_runtime_makedev(
+static unsigned long tfb_runtime_makedev(
     unsigned long major,
     unsigned long minor
 ) {
@@ -2122,7 +4364,7 @@ static unsigned long pp_runtime_makedev(
     );
 }
 
-static int pp_runtime_parse_device_number(
+static int tfb_runtime_parse_device_number(
     const char *value,
     long length,
     unsigned long *major,
@@ -2189,19 +4431,19 @@ static int pp_runtime_parse_device_number(
     return 0;
 }
 
-static int pp_get_event_device_number(
+static int tfb_get_event_device_number(
     int index,
     unsigned long *major,
     unsigned long *minor
 ) {
     char path[64];
 
-    pp_runtime_sysfs_event_dev_path(
+    tfb_runtime_sysfs_event_dev_path(
         index,
         path
     );
 
-    long fd = pp_open(
+    long fd = tfb_open(
         path,
         O_RDONLY
     );
@@ -2212,7 +4454,7 @@ static int pp_get_event_device_number(
 
     char buffer[32];
 
-    long amount = pp_syscall3(
+    long amount = tfb_syscall3(
         SYS_READ,
         fd,
         (long) buffer,
@@ -2222,7 +4464,7 @@ static int pp_get_event_device_number(
         )
     );
 
-    pp_close(
+    tfb_close(
         fd
     );
 
@@ -2232,7 +4474,7 @@ static int pp_get_event_device_number(
 
     buffer[amount] = '\0';
 
-    return pp_runtime_parse_device_number(
+    return tfb_runtime_parse_device_number(
         buffer,
         amount,
         major,
@@ -2240,7 +4482,7 @@ static int pp_get_event_device_number(
     );
 }
 
-static int pp_realize_input_nodes(
+static int tfb_realize_input_nodes(
     int *created_input_directory,
     int *created_nodes,
     int *sysfs_devices_seen
@@ -2261,7 +4503,7 @@ static int pp_realize_input_nodes(
      * tmpfs. TreeForge Bootstrap only adds the missing input subdirectory if
      * necessary.
      */
-    long mkdir_result = pp_syscall3(
+    long mkdir_result = tfb_syscall3(
         SYS_MKDIRAT,
         AT_FDCWD,
         (long) "/dev/input",
@@ -2283,7 +4525,7 @@ static int pp_realize_input_nodes(
         unsigned long minor;
 
         if (
-            pp_get_event_device_number(
+            tfb_get_event_device_number(
                 index,
                 &major,
                 &minor
@@ -2297,17 +4539,17 @@ static int pp_realize_input_nodes(
 
         char path[32];
 
-        pp_event_path(
+        tfb_event_path(
             index,
             path
         );
 
-        long result = pp_syscall4(
+        long result = tfb_syscall4(
             SYS_MKNODAT,
             AT_FDCWD,
             (long) path,
             S_IFCHR | 0600,
-            (long) pp_runtime_makedev(
+            (long) tfb_runtime_makedev(
                 major,
                 minor
             )
@@ -2329,7 +4571,7 @@ static int pp_realize_input_nodes(
     return 0;
 }
 
-static void pp_cleanup_realized_input_nodes(
+static void tfb_cleanup_realized_input_nodes(
     int created_input_directory,
     int *created_nodes
 ) {
@@ -2344,12 +4586,12 @@ static void pp_cleanup_realized_input_nodes(
 
         char path[32];
 
-        pp_event_path(
+        tfb_event_path(
             index,
             path
         );
 
-        pp_syscall3(
+        tfb_syscall3(
             SYS_UNLINKAT,
             AT_FDCWD,
             (long) path,
@@ -2360,7 +4602,7 @@ static void pp_cleanup_realized_input_nodes(
     }
 
     if (created_input_directory) {
-        pp_syscall3(
+        tfb_syscall3(
             SYS_UNLINKAT,
             AT_FDCWD,
             (long) "/dev/input",
@@ -2369,7 +4611,7 @@ static void pp_cleanup_realized_input_nodes(
     }
 }
 
-static void pp_close_inputs(
+static void tfb_close_inputs(
     long *inputs
 ) {
     for (
@@ -2378,7 +4620,7 @@ static void pp_close_inputs(
         index++
     ) {
         if (inputs[index] >= 0) {
-            pp_close(
+            tfb_close(
                 inputs[index]
             );
 
@@ -2387,15 +4629,15 @@ static void pp_close_inputs(
     }
 }
 
-static int pp_reboot_to(
+static int tfb_reboot_to(
     const char *target
 ) {
-    pp_syscall1(
+    tfb_syscall1(
         SYS_SYNC,
         0
     );
 
-    long result = pp_syscall4(
+    long result = tfb_syscall4(
         SYS_REBOOT,
         LINUX_REBOOT_MAGIC1,
         LINUX_REBOOT_MAGIC2,
@@ -2412,21 +4654,25 @@ static int pp_reboot_to(
 
 #define SYS_KILL 129
 #define SYS_CLONE 220
+#ifndef SYS_SETPGID
+#define SYS_SETPGID 154
+#endif
 #define SYS_WAIT4 260
 
-#define PIXEL_PARTITIONER_SIGKILL 9
-#define PIXEL_PARTITIONER_SIGCHLD 17
+#define TREEFORGE_BOOTSTRAP_SIGKILL 9
+#define TREEFORGE_BOOTSTRAP_SIGTERM 15
+#define TREEFORGE_BOOTSTRAP_SIGCHLD 17
 
-#define PIXEL_PARTITIONER_WAIT_WNOHANG 1
-
-
-#define PIXEL_PARTITIONER_TRANSITION_FAILURE_PATH \
-    "/metadata/pixel-partitioner/last-transition-failure"
+#define TREEFORGE_BOOTSTRAP_WAIT_WNOHANG 1
 
 
+#define TREEFORGE_BOOTSTRAP_TRANSITION_FAILURE_PATH \
+    "/metadata/treeforge-bootstrap/last-transition-failure"
 
 
-static int pp_string_equal(
+
+
+static int tfb_string_equal(
     const char *left,
     const char *right
 ) {
@@ -2450,10 +4696,10 @@ static int pp_string_equal(
 }
 
 
-static int pp_probe_readable_path(
+static int tfb_probe_readable_path(
     const char *path
 ) {
-    long fd = pp_open(
+    long fd = tfb_open(
         path,
         O_RDONLY
         | O_NONBLOCK
@@ -2463,7 +4709,7 @@ static int pp_probe_readable_path(
         return 0;
     }
 
-    pp_close(
+    tfb_close(
         fd
     );
 
@@ -2471,10 +4717,10 @@ static int pp_probe_readable_path(
 }
 
 
-static void pp_create_presence_marker(
+static void tfb_create_presence_marker(
     const char *path
 ) {
-    long fd = pp_syscall4(
+    long fd = tfb_syscall4(
         SYS_OPENAT,
         AT_FDCWD,
         (long) path,
@@ -2485,14 +4731,14 @@ static void pp_create_presence_marker(
     );
 
     if (fd >= 0) {
-        pp_close(
+        tfb_close(
             fd
         );
     }
 }
 
 
-static void pp_record_transition_failure(
+static void tfb_record_transition_failure(
     const char *reason
 ) {
     /*
@@ -2502,17 +4748,17 @@ static void pp_record_transition_failure(
      * Android first stage mounts it, so this path is strictly
      * best-effort and must never become a new boot dependency.
      */
-    pp_syscall3(
+    tfb_syscall3(
         SYS_MKDIRAT,
         AT_FDCWD,
-        (long) "/metadata/pixel-partitioner",
+        (long) "/metadata/treeforge-bootstrap",
         0755
     );
 
-    long fd = pp_syscall4(
+    long fd = tfb_syscall4(
         SYS_OPENAT,
         AT_FDCWD,
-        (long) PIXEL_PARTITIONER_TRANSITION_FAILURE_PATH,
+        (long) TREEFORGE_BOOTSTRAP_TRANSITION_FAILURE_PATH,
         O_WRONLY
         | O_CREAT
         | O_TRUNC,
@@ -2523,13 +4769,13 @@ static void pp_record_transition_failure(
         return;
     }
 
-    pp_write_all(
+    tfb_write_all(
         fd,
-        "pixel-partitioner-transition-failure-v1\n"
+        "treeforge-bootstrap-transition-failure-v1\n"
         "reason="
     );
 
-    pp_write_all(
+    tfb_write_all(
         fd,
         (
             reason
@@ -2538,23 +4784,23 @@ static void pp_record_transition_failure(
         )
     );
 
-    pp_write_all(
+    tfb_write_all(
         fd,
         "\n"
     );
 
-    pp_close(
+    tfb_close(
         fd
     );
 
-    pp_syscall1(
+    tfb_syscall1(
         SYS_SYNC,
         0
     );
 }
 
 
-static int pp_fb_parse_dev_number(
+static int tfb_fb_parse_dev_number(
     const char *buffer,
     usize length,
     u32 *major_out,
@@ -2652,7 +4898,7 @@ static int pp_fb_parse_dev_number(
 }
 
 
-static unsigned long pp_fb_encode_dev(
+static unsigned long tfb_fb_encode_dev(
     u32 major_value,
     u32 minor_value
 ) {
@@ -2680,49 +4926,49 @@ static unsigned long pp_fb_encode_dev(
 }
 
 
-static void pp_fb_remove_created_node(void) {
-    if (!pp_fb_created_node) {
+static void tfb_fb_remove_created_node(void) {
+    if (!tfb_fb_created_node) {
         return;
     }
 
-    pp_syscall3(
+    tfb_syscall3(
         SYS_UNLINKAT,
         AT_FDCWD,
-        (long) PP_FB_DEVICE_PATH,
+        (long) TFB_FB_DEVICE_PATH,
         0
     );
 
-    pp_fb_created_node = 0;
+    tfb_fb_created_node = 0;
 }
 
 
-static int pp_fb_realize_node(void) {
+static int tfb_fb_realize_node(void) {
     /*
      * If a device manager has already materialized the node, leave it
      * entirely alone.
      */
-    long existing = pp_open(
-        PP_FB_DEVICE_PATH,
+    long existing = tfb_open(
+        TFB_FB_DEVICE_PATH,
         O_RDWR
     );
 
     if (existing >= 0) {
-        pp_close(
+        tfb_close(
             existing
         );
 
         return 1;
     }
 
-    long sysfs_fd = pp_open(
-        PP_FB_SYSFS_DEV_PATH,
+    long sysfs_fd = tfb_open(
+        TFB_FB_SYSFS_DEV_PATH,
         O_RDONLY
         | O_NONBLOCK
     );
 
     if (sysfs_fd < 0) {
-        pp_create_presence_marker(
-            "/dev/pixel-partitioner-fb-sysfs-missing"
+        tfb_create_presence_marker(
+            "/dev/treeforge-bootstrap-fb-sysfs-missing"
         );
 
         return 0;
@@ -2730,20 +4976,20 @@ static int pp_fb_realize_node(void) {
 
     char value[32];
 
-    long amount = pp_syscall3(
+    long amount = tfb_syscall3(
         SYS_READ,
         sysfs_fd,
         (long) value,
         (long) sizeof(value)
     );
 
-    pp_close(
+    tfb_close(
         sysfs_fd
     );
 
     if (amount <= 0) {
-        pp_create_presence_marker(
-            "/dev/pixel-partitioner-fb-sysfs-read-failed"
+        tfb_create_presence_marker(
+            "/dev/treeforge-bootstrap-fb-sysfs-read-failed"
         );
 
         return 0;
@@ -2753,31 +4999,31 @@ static int pp_fb_realize_node(void) {
     u32 minor_value = 0;
 
     if (
-        !pp_fb_parse_dev_number(
+        !tfb_fb_parse_dev_number(
             value,
             (usize) amount,
             &major_value,
             &minor_value
         )
     ) {
-        pp_create_presence_marker(
-            "/dev/pixel-partitioner-fb-dev-number-invalid"
+        tfb_create_presence_marker(
+            "/dev/treeforge-bootstrap-fb-dev-number-invalid"
         );
 
         return 0;
     }
 
     unsigned long encoded = (
-        pp_fb_encode_dev(
+        tfb_fb_encode_dev(
             major_value,
             minor_value
         )
     );
 
-    long result = pp_syscall4(
+    long result = tfb_syscall4(
         SYS_MKNODAT,
         AT_FDCWD,
-        (long) PP_FB_DEVICE_PATH,
+        (long) TFB_FB_DEVICE_PATH,
         S_IFCHR | 0600,
         (long) encoded
     );
@@ -2786,32 +5032,32 @@ static int pp_fb_realize_node(void) {
      * Even if mknodat raced with another creator, opening the node is
      * the authoritative result.
      */
-    long verify = pp_open(
-        PP_FB_DEVICE_PATH,
+    long verify = tfb_open(
+        TFB_FB_DEVICE_PATH,
         O_RDWR
     );
 
     if (verify < 0) {
-        pp_create_presence_marker(
-            "/dev/pixel-partitioner-fb-node-failed"
+        tfb_create_presence_marker(
+            "/dev/treeforge-bootstrap-fb-node-failed"
         );
 
         return 0;
     }
 
-    pp_close(
+    tfb_close(
         verify
     );
 
     if (result == 0) {
-        pp_fb_created_node = 1;
+        tfb_fb_created_node = 1;
 
-        pp_create_presence_marker(
-            "/dev/pixel-partitioner-fb-node-created"
+        tfb_create_presence_marker(
+            "/dev/treeforge-bootstrap-fb-node-created"
         );
     } else {
-        pp_create_presence_marker(
-            "/dev/pixel-partitioner-fb-node-existing"
+        tfb_create_presence_marker(
+            "/dev/treeforge-bootstrap-fb-node-existing"
         );
     }
 
@@ -2819,9 +5065,9 @@ static int pp_fb_realize_node(void) {
 }
 
 
-static int pp_fb_read_info(
+static int tfb_fb_read_info(
     long fd,
-    struct pp_fb_info *info
+    struct tfb_fb_info *info
 ) {
     if (
         fd < 0
@@ -2839,7 +5085,7 @@ static int pp_fb_read_info(
     );
 
     while (remaining != 0) {
-        long amount = pp_syscall3(
+        long amount = tfb_syscall3(
             SYS_READ,
             fd,
             (long) cursor,
@@ -2858,8 +5104,8 @@ static int pp_fb_read_info(
 }
 
 
-static int pp_fb_validate_info(
-    const struct pp_fb_info *info
+static int tfb_fb_validate_info(
+    const struct tfb_fb_info *info
 ) {
     if (!info) {
         return 0;
@@ -2867,7 +5113,7 @@ static int pp_fb_validate_info(
 
     if (
         info->abi_version
-        != PP_FB_ABI_VERSION
+        != TFB_FB_ABI_VERSION
     ) {
         return 0;
     }
@@ -2882,7 +5128,7 @@ static int pp_fb_validate_info(
 
     if (
         info->flags
-        != PP_FB_REQUIRED_FLAGS
+        != TFB_FB_REQUIRED_FLAGS
     ) {
         return 0;
     }
@@ -2948,66 +5194,66 @@ static int pp_fb_validate_info(
 }
 
 
-static int pp_fb_begin(void) {
-    if (pp_fb_active) {
+static int tfb_fb_begin(void) {
+    if (tfb_fb_active) {
         return 1;
     }
 
-    if (!pp_fb_realize_node()) {
+    if (!tfb_fb_realize_node()) {
         return 0;
     }
 
-    long fd = pp_open(
-        PP_FB_DEVICE_PATH,
+    long fd = tfb_open(
+        TFB_FB_DEVICE_PATH,
         O_RDWR
     );
 
     if (fd < 0) {
-        pp_create_presence_marker(
-            "/dev/pixel-partitioner-fb-open-failed"
+        tfb_create_presence_marker(
+            "/dev/treeforge-bootstrap-fb-open-failed"
         );
 
-        pp_fb_remove_created_node();
+        tfb_fb_remove_created_node();
 
         return 0;
     }
 
-    struct pp_fb_info info;
+    struct tfb_fb_info info;
 
     if (
-        !pp_fb_read_info(
+        !tfb_fb_read_info(
             fd,
             &info
         )
     ) {
-        pp_create_presence_marker(
-            "/dev/pixel-partitioner-fb-info-read-failed"
+        tfb_create_presence_marker(
+            "/dev/treeforge-bootstrap-fb-info-read-failed"
         );
 
-        pp_close(
+        tfb_close(
             fd
         );
 
-        pp_fb_remove_created_node();
+        tfb_fb_remove_created_node();
 
         return 0;
     }
 
-    if (!pp_fb_validate_info(&info)) {
-        pp_create_presence_marker(
-            "/dev/pixel-partitioner-fb-info-invalid"
+    if (!tfb_fb_validate_info(&info)) {
+        tfb_create_presence_marker(
+            "/dev/treeforge-bootstrap-fb-info-invalid"
         );
 
-        pp_close(
+        tfb_close(
             fd
         );
 
-        pp_fb_remove_created_node();
+        tfb_fb_remove_created_node();
 
         return 0;
     }
 
-    long mapped_address = pp_syscall6(
+    long mapped_address = tfb_syscall6(
         SYS_MMAP,
         0,
         (long) info.mmap_bytes,
@@ -3018,15 +5264,15 @@ static int pp_fb_begin(void) {
     );
 
     if (mapped_address < 0) {
-        pp_create_presence_marker(
-            "/dev/pixel-partitioner-fb-mmap-failed"
+        tfb_create_presence_marker(
+            "/dev/treeforge-bootstrap-fb-mmap-failed"
         );
 
-        pp_close(
+        tfb_close(
             fd
         );
 
-        pp_fb_remove_created_node();
+        tfb_fb_remove_created_node();
 
         return 0;
     }
@@ -3039,99 +5285,99 @@ static int pp_fb_begin(void) {
      *   - visible width/height;
      *   - driver/kernel supplied row pitch.
      */
-    pp_fb_fd = fd;
-    pp_fb_active = 1;
+    tfb_fb_fd = fd;
+    tfb_fb_active = 1;
 
-    pp_fb_menu_active = 1;
-    pp_fb_menu_mapped_address = (
+    tfb_fb_menu_active = 1;
+    tfb_fb_menu_mapped_address = (
         mapped_address
     );
-    pp_fb_menu_mapped_size = (
+    tfb_fb_menu_mapped_size = (
         info.mmap_bytes
     );
-    pp_fb_menu_width = (
+    tfb_fb_menu_width = (
         info.width
     );
-    pp_fb_menu_height = (
+    tfb_fb_menu_height = (
         info.height
     );
-    pp_fb_menu_pitch = (
+    tfb_fb_menu_pitch = (
         info.stride
     );
 
-    pp_create_presence_marker(
-        "/dev/pixel-partitioner-fb-info-ok"
+    tfb_create_presence_marker(
+        "/dev/treeforge-bootstrap-fb-info-ok"
     );
 
-    pp_create_presence_marker(
-        "/dev/pixel-partitioner-fb-mmap-ok"
+    tfb_create_presence_marker(
+        "/dev/treeforge-bootstrap-fb-mmap-ok"
     );
 
-    pp_create_presence_marker(
-        "/dev/pixel-partitioner-fb-menu-active"
+    tfb_create_presence_marker(
+        "/dev/treeforge-bootstrap-fb-menu-active"
     );
 
-    pp_log(
-        "pixel-partitioner-fb menu-active"
+    tfb_log(
+        "treeforge-bootstrap-fb menu-active"
     );
 
     return 1;
 }
 
 
-static void pp_fb_cleanup(void) {
-    if (!pp_fb_active) {
+static void tfb_fb_cleanup(void) {
+    if (!tfb_fb_active) {
         return;
     }
 
     if (
-        pp_fb_menu_mapped_address >= 0
-        && pp_fb_menu_mapped_size != 0
+        tfb_fb_menu_mapped_address >= 0
+        && tfb_fb_menu_mapped_size != 0
     ) {
-        pp_syscall2(
+        tfb_syscall2(
             SYS_MUNMAP,
-            pp_fb_menu_mapped_address,
-            (long) pp_fb_menu_mapped_size
+            tfb_fb_menu_mapped_address,
+            (long) tfb_fb_menu_mapped_size
         );
     }
 
-    pp_close(
-        pp_fb_fd
+    tfb_close(
+        tfb_fb_fd
     );
 
-    pp_fb_remove_created_node();
+    tfb_fb_remove_created_node();
 
-    pp_fb_fd = -1;
-    pp_fb_active = 0;
+    tfb_fb_fd = -1;
+    tfb_fb_active = 0;
 
-    pp_fb_menu_active = 0;
-    pp_fb_menu_mapped_address = -1;
-    pp_fb_menu_mapped_size = 0;
+    tfb_fb_menu_active = 0;
+    tfb_fb_menu_mapped_address = -1;
+    tfb_fb_menu_mapped_size = 0;
 
-    pp_fb_menu_width = 0;
-    pp_fb_menu_height = 0;
-    pp_fb_menu_pitch = 0;
+    tfb_fb_menu_width = 0;
+    tfb_fb_menu_height = 0;
+    tfb_fb_menu_pitch = 0;
 
-    pp_create_presence_marker(
-        "/dev/pixel-partitioner-fb-cleanup"
+    tfb_create_presence_marker(
+        "/dev/treeforge-bootstrap-fb-cleanup"
     );
 }
 
 
-static void pp_fb_menu_cleanup(void) {
+static void tfb_fb_menu_cleanup(void) {
     /*
-     * The renderer still uses the historical pp_fb_* internal state
-     * names, but display ownership is now exclusively the Pixel
-     * Partitioner framebuffer bridge.
+     * The renderer uses the tfb_fb_* internal state
+     * names, while display ownership is exclusively the TreeForge
+     * Bootstrap framebuffer bridge.
      */
-    if (pp_fb_active) {
-        pp_fb_cleanup();
+    if (tfb_fb_active) {
+        tfb_fb_cleanup();
     }
 }
 
-static void pp_probe_display_surfaces(void) {
+static void tfb_probe_display_surfaces(void) {
     /*
-     * PIXEL_PARTITIONER_FB_BRIDGE_ONLY_V1
+     * TREEFORGE_BOOTSTRAP_FB_BRIDGE_ONLY_V1
      *
      * Hardware acceptance proved the GS201 bootloader framebuffer
      * bridge as the canonical TreeForge Bootstrap early-display path.
@@ -3139,25 +5385,25 @@ static void pp_probe_display_surfaces(void) {
      * Do not program DRM/KMS here and do not fall back to the legacy
      * TreeForge Bootstrap framebuffer realization path.
      */
-    if (pp_fb_begin()) {
-        pp_create_presence_marker(
-            "/dev/pixel-partitioner-fb-primary"
+    if (tfb_fb_begin()) {
+        tfb_create_presence_marker(
+            "/dev/treeforge-bootstrap-fb-primary"
         );
 
         return;
     }
 
-    pp_create_presence_marker(
-        "/dev/pixel-partitioner-fb-required-failed"
+    tfb_create_presence_marker(
+        "/dev/treeforge-bootstrap-fb-required-failed"
     );
 
-    pp_log(
-        "pixel-partitioner-fb required-failed"
+    tfb_log(
+        "treeforge-bootstrap-fb required-failed"
     );
 }
 
 
-static const char *pp_transition_failure_display_reason(
+static const char *tfb_transition_failure_display_reason(
     const char *reason
 ) {
     if (!reason) {
@@ -3165,34 +5411,34 @@ static const char *pp_transition_failure_display_reason(
     }
 
     if (
-        pp_string_equal(
+        tfb_string_equal(
             reason,
-            "invalid-pixel-partitioner-reentry"
+            "invalid-treeforge-bootstrap-reentry"
         )
     ) {
         return "INVALID REENTRY";
     }
 
     if (
-        pp_string_equal(
+        tfb_string_equal(
             reason,
-            "pixel-partitioner-runtime-materialize"
+            "treeforge-bootstrap-runtime-materialize"
         )
     ) {
         return "RUNTIME MATERIALIZE";
     }
 
     if (
-        pp_string_equal(
+        tfb_string_equal(
             reason,
-            "pixel-partitioner-adb-service-clone"
+            "treeforge-bootstrap-adb-service-clone"
         )
     ) {
         return "ADB SERVICE CLONE";
     }
 
     if (
-        pp_string_equal(
+        tfb_string_equal(
             reason,
             "transition-fd-open"
         )
@@ -3201,7 +5447,7 @@ static const char *pp_transition_failure_display_reason(
     }
 
     if (
-        pp_string_equal(
+        tfb_string_equal(
             reason,
             "transition-fd-duplicate"
         )
@@ -3210,7 +5456,7 @@ static const char *pp_transition_failure_display_reason(
     }
 
     if (
-        pp_string_equal(
+        tfb_string_equal(
             reason,
             "first-stage-exec"
         )
@@ -3219,7 +5465,7 @@ static const char *pp_transition_failure_display_reason(
     }
 
     if (
-        pp_string_equal(
+        tfb_string_equal(
             reason,
             "bootloader-reboot-returned"
         )
@@ -3227,14 +5473,32 @@ static const char *pp_transition_failure_display_reason(
         return "BOOTLOADER REBOOT RETURNED";
     }
 
+    if (
+        tfb_string_equal(
+            reason,
+            "android-slot-a-env"
+        )
+    ) {
+        return "ANDROID SLOT A ENV";
+    }
+
+    if (
+        tfb_string_equal(
+            reason,
+            "android-slot-a-exec"
+        )
+    ) {
+        return "ANDROID SLOT A EXEC";
+    }
+
     return "UNMAPPED FAILURE REASON";
 }
 
-static void pp_render_transition_failure(
+static void tfb_render_transition_failure(
     const char *reason
 ) {
     const char *display_reason = (
-        pp_transition_failure_display_reason(
+        tfb_transition_failure_display_reason(
             reason
         )
     );
@@ -3242,13 +5506,13 @@ static void pp_render_transition_failure(
     /*
      * Console/TTY path remains useful even if KMS setup fails.
      */
-    pp_output(
+    tfb_output(
         "\033[2J\033[H"
         "TreeForge Bootstrap Boot Failure\n\n"
         "reason="
     );
 
-    pp_output(
+    tfb_output(
         reason
         ? reason
         : "unknown"
@@ -3256,63 +5520,63 @@ static void pp_render_transition_failure(
 
     if (
         reason
-        && pp_string_equal(
+        && tfb_string_equal(
             reason,
-            "pixel-partitioner-runtime-materialize"
+            "treeforge-bootstrap-runtime-materialize"
         )
     ) {
-        pp_output(
+        tfb_output(
             "\nstage="
         );
 
-        pp_output(
-            pp_runtime_materialize_failure_stage
+        tfb_output(
+            tfb_runtime_materialize_failure_stage
         );
 
-        pp_output(
+        tfb_output(
             "\nerror="
         );
 
-        pp_output(
-            pp_copy_fd_failure_code_name(
-                pp_copy_fd_failure_code
+        tfb_output(
+            tfb_copy_fd_failure_code_name(
+                tfb_copy_fd_failure_code
             )
         );
 
-        pp_output(
+        tfb_output(
             "\nsource="
         );
 
-        pp_output(
-            pp_runtime_materialize_failure_source_path
-            ? pp_runtime_materialize_failure_source_path
+        tfb_output(
+            tfb_runtime_materialize_failure_source_path
+            ? tfb_runtime_materialize_failure_source_path
             : "unknown"
         );
 
-        pp_output(
+        tfb_output(
             "\ndestination="
         );
 
-        pp_output(
-            pp_runtime_materialize_failure_path
-            ? pp_runtime_materialize_failure_path
+        tfb_output(
+            tfb_runtime_materialize_failure_path
+            ? tfb_runtime_materialize_failure_path
             : "unknown"
         );
 
-        pp_output(
+        tfb_output(
             "\n"
         );
     }
 
-    pp_output(
+    tfb_output(
         "\n"
         "HALTED FOR DIAGNOSTICS\n"
         "FORCE REBOOT WHEN DONE\n"
     );
 
     if (
-        !pp_fb_menu_active
-        || pp_fb_menu_mapped_address < 0
+        !tfb_fb_menu_active
+        || tfb_fb_menu_mapped_address < 0
     ) {
         return;
     }
@@ -3320,21 +5584,21 @@ static void pp_render_transition_failure(
     const u32 background = 0x00000000U;
     const u32 foreground = 0x00ffffffU;
 
-    pp_fb_fill_rect(
+    tfb_fb_fill_rect(
         0,
         0,
-        pp_fb_menu_width,
-        pp_fb_menu_height,
+        tfb_fb_menu_width,
+        tfb_fb_menu_height,
         background
     );
 
     u32 scale = (
-        pp_fb_menu_width
+        tfb_fb_menu_width
         / 160U
     );
 
     u32 height_scale = (
-        pp_fb_menu_height
+        tfb_fb_menu_height
         / 220U
     );
 
@@ -3350,28 +5614,28 @@ static void pp_render_transition_failure(
         scale = 8U;
     }
 
-    pp_fb_draw_management_line(
+    tfb_fb_draw_management_line(
         "TREEFORGE MENU",
         18U * scale,
         scale,
         foreground
     );
 
-    pp_fb_draw_management_line(
+    tfb_fb_draw_management_line(
         "BOOT FAILURE",
         46U * scale,
         scale,
         foreground
     );
 
-    pp_fb_draw_management_line(
+    tfb_fb_draw_management_line(
         "REASON",
         76U * scale,
         scale,
         foreground
     );
 
-    pp_fb_draw_management_line(
+    tfb_fb_draw_management_line(
         display_reason,
         94U * scale,
         scale,
@@ -3380,39 +5644,39 @@ static void pp_render_transition_failure(
 
     if (
         reason
-        && pp_string_equal(
+        && tfb_string_equal(
             reason,
-            "pixel-partitioner-runtime-materialize"
+            "treeforge-bootstrap-runtime-materialize"
         )
     ) {
-        pp_fb_draw_management_line(
-            pp_runtime_materialize_failure_stage,
+        tfb_fb_draw_management_line(
+            tfb_runtime_materialize_failure_stage,
             112U * scale,
             scale,
             foreground
         );
 
-        pp_fb_draw_management_line(
-            pp_copy_fd_failure_code_name(
-                pp_copy_fd_failure_code
+        tfb_fb_draw_management_line(
+            tfb_copy_fd_failure_code_name(
+                tfb_copy_fd_failure_code
             ),
             128U * scale,
             scale,
             foreground
         );
 
-        pp_fb_draw_management_line(
-            pp_runtime_materialize_failure_source_path
-            ? pp_runtime_materialize_failure_source_path
+        tfb_fb_draw_management_line(
+            tfb_runtime_materialize_failure_source_path
+            ? tfb_runtime_materialize_failure_source_path
             : "UNKNOWN SOURCE",
             146U * scale,
             scale,
             foreground
         );
 
-        pp_fb_draw_management_line(
-            pp_runtime_materialize_failure_path
-            ? pp_runtime_materialize_failure_path
+        tfb_fb_draw_management_line(
+            tfb_runtime_materialize_failure_path
+            ? tfb_runtime_materialize_failure_path
             : "UNKNOWN DESTINATION",
             164U * scale,
             scale,
@@ -3420,14 +5684,14 @@ static void pp_render_transition_failure(
         );
     }
 
-    pp_fb_draw_management_line(
+    tfb_fb_draw_management_line(
         "HALTED FOR DIAGNOSTICS",
         188U * scale,
         scale,
         foreground
     );
 
-    pp_fb_draw_management_line(
+    tfb_fb_draw_management_line(
         "FORCE REBOOT WHEN DONE",
         204U * scale,
         scale,
@@ -3437,7 +5701,7 @@ static void pp_render_transition_failure(
 
 
 __attribute__((noreturn))
-static void pp_transition_failure(
+static void tfb_transition_failure(
     const char *reason
 ) {
     /*
@@ -3446,11 +5710,11 @@ static void pp_transition_failure(
      * Reopen /dev/kmsg best-effort on the failure-only path so the
      * diagnostic descriptor can never leak into successful Android.
      */
-    long failure_kmsg = pp_kmsg;
+    long failure_kmsg = tfb_kmsg;
     int close_failure_kmsg = 0;
 
     if (failure_kmsg < 0) {
-        failure_kmsg = pp_open(
+        failure_kmsg = tfb_open(
             "/dev/kmsg",
             O_WRONLY
             | O_NONBLOCK
@@ -3461,12 +5725,12 @@ static void pp_transition_failure(
         }
     }
 
-    pp_write_all(
+    tfb_write_all(
         failure_kmsg,
         "TreeForge Bootstrap: transition-failure reason="
     );
 
-    pp_write_all(
+    tfb_write_all(
         failure_kmsg,
         (
             reason
@@ -3475,97 +5739,97 @@ static void pp_transition_failure(
         )
     );
 
-    pp_write_all(
+    tfb_write_all(
         failure_kmsg,
         "\n"
     );
 
     if (close_failure_kmsg) {
-        pp_close(
+        tfb_close(
             failure_kmsg
         );
     }
 
-    pp_record_transition_failure(
+    tfb_record_transition_failure(
         reason
     );
 
 
-    if (!pp_fb_menu_active) {
-        pp_probe_display_surfaces();
+    if (!tfb_fb_menu_active) {
+        tfb_probe_display_surfaces();
     }
 
-    pp_render_transition_failure(
+    tfb_render_transition_failure(
         reason
     );
 
     for (;;) {
-        pp_sleep_ms(
+        tfb_sleep_ms(
             1000
         );
     }
 }
 
 
-static void pp_prepare_shell_compat(void) {
+static void tfb_prepare_shell_compat(void) {
     const char *busybox =
-        "/dev/pixel-partitioner-runtime/system/bin/busybox";
+        "/dev/treeforge-bootstrap-runtime/system/bin/busybox";
 
     if (
-        !pp_probe_readable_path(
+        !tfb_probe_readable_path(
             busybox
         )
     ) {
-        pp_log(
-            "pixel-partitioner-shell=busybox-missing"
+        tfb_log(
+            "treeforge-bootstrap-shell=busybox-missing"
         );
 
         return;
     }
 
-    pp_syscall3(
+    tfb_syscall3(
         SYS_MKDIRAT,
         AT_FDCWD,
         (long) "/bin",
         0755
     );
 
-    pp_syscall3(
+    tfb_syscall3(
         SYS_MKDIRAT,
         AT_FDCWD,
         (long) "/system",
         0755
     );
 
-    pp_syscall3(
+    tfb_syscall3(
         SYS_MKDIRAT,
         AT_FDCWD,
         (long) "/system/bin",
         0755
     );
 
-    pp_syscall3(
+    tfb_syscall3(
         SYS_UNLINKAT,
         AT_FDCWD,
         (long) "/bin/sh",
         0
     );
 
-    pp_syscall3(
+    tfb_syscall3(
         SYS_UNLINKAT,
         AT_FDCWD,
         (long) "/system/bin/sh",
         0
     );
 
-    long bin_shell = pp_syscall3(
+    long bin_shell = tfb_syscall3(
         SYS_SYMLINKAT,
         (long) busybox,
         AT_FDCWD,
         (long) "/bin/sh"
     );
 
-    long system_shell = pp_syscall3(
+    long system_shell = tfb_syscall3(
         SYS_SYMLINKAT,
         (long) busybox,
         AT_FDCWD,
@@ -3575,30 +5839,90 @@ static void pp_prepare_shell_compat(void) {
     if (
         bin_shell >= 0
         && system_shell >= 0
-        && pp_probe_readable_path(
+        && tfb_probe_readable_path(
             "/bin/sh"
         )
-        && pp_probe_readable_path(
+        && tfb_probe_readable_path(
             "/system/bin/sh"
         )
     ) {
-        pp_log(
-            "pixel-partitioner-shell=ready"
+        tfb_log(
+            "treeforge-bootstrap-shell=ready"
         );
     } else {
-        pp_log(
-            "pixel-partitioner-shell=compat-failed"
+        tfb_log(
+            "treeforge-bootstrap-shell=compat-failed"
         );
     }
 }
 
 
-static void pp_start_adb_service(
+/*
+ * ================================================================
+ * TFB_TOUCHSCREEN_MODULE_REALIZATION_V14
+ * ================================================================
+ *
+ * Google FirstStageMain has already mounted the matching tangorpro
+ * vendor/vendor_dlkm module tree and realized the common GS201
+ * dependency base.
+ *
+ * Hardware acceptance proved that the remaining cold-boot touch
+ * roots are:
+ *
+ *   goog_usi_stylus.ko
+ *   goog_touch_interface.ko
+ *   nvt_touch.ko
+ *
+ * Realize them from /vendor/lib/modules with the retained TreeForge
+ * BusyBox provider.  Never duplicate these kernel modules into the
+ * Bootstrap runtime.
+ *
+ * This path is deliberately non-fatal.  Volume Up/Down/Power remain
+ * the recovery input path if touchscreen realization fails.
+ */
+
+static int tfb_busybox_insmod_if_missing(
+    const char *module_state,
+    const char *module_path,
+    const char *already_log,
+    const char *loaded_log,
+    const char *failed_log,
     char **envp
 ) {
-    long child = pp_syscall6(
+    static const char busybox[] =
+        "/dev/treeforge-bootstrap-runtime/"
+        "system/bin/busybox";
+
+    if (
+        tfb_probe_readable_path(
+            module_state
+        )
+    ) {
+        tfb_log(
+            already_log
+        );
+
+        return 1;
+    }
+
+    if (
+        !tfb_probe_readable_path(
+            busybox
+        )
+        || !tfb_probe_readable_path(
+            module_path
+        )
+    ) {
+        tfb_log(
+            failed_log
+        );
+
+        return 0;
+    }
+
+    long child = tfb_syscall6(
         SYS_CLONE,
-        PIXEL_PARTITIONER_SIGCHLD,
+        TREEFORGE_BOOTSTRAP_SIGCHLD,
         0,
         0,
         0,
@@ -3607,41 +5931,29 @@ static void pp_start_adb_service(
     );
 
     if (child < 0) {
-        pp_transition_failure(
-            "pixel-partitioner-adb-service-clone"
+        tfb_log(
+            failed_log
         );
+
+        return 0;
     }
 
     if (child == 0) {
         char *argv[] = {
-            (char *)
-                "/dev/pixel-partitioner-runtime/"
-                "pixel-partitioner-adb-service",
+            (char *) busybox,
+            (char *) "insmod",
+            (char *) module_path,
             0
         };
 
-        pp_close(
-            pp_tty
-        );
-
-        pp_close(
-            pp_console
-        );
-
-        pp_close(
-            pp_kmsg
-        );
-
-        pp_syscall3(
+        tfb_syscall3(
             SYS_EXECVE,
-            (long)
-                "/dev/pixel-partitioner-runtime/"
-                "pixel-partitioner-adb-service",
+            (long) busybox,
             (long) argv,
             (long) envp
         );
 
-        pp_syscall1(
+        tfb_syscall1(
             SYS_EXIT,
             127
         );
@@ -3650,14 +5962,1312 @@ static void pp_start_adb_service(
         }
     }
 
-    pp_log(
-        "pixel-partitioner-adb-service=started"
+    int status = 0;
+
+    long waited = tfb_syscall4(
+        SYS_WAIT4,
+        child,
+        (long) &status,
+        0,
+        0
+    );
+
+    if (
+        waited != child
+        || status != 0
+        || !tfb_probe_readable_path(
+            module_state
+        )
+    ) {
+        tfb_log(
+            failed_log
+        );
+
+        return 0;
+    }
+
+    tfb_log(
+        loaded_log
+    );
+
+    return 1;
+}
+
+
+static int tfb_realize_touchscreen_modules(
+    char **envp
+) {
+    if (
+        !tfb_busybox_insmod_if_missing(
+            "/sys/module/goog_usi_stylus",
+            "/vendor/lib/modules/goog_usi_stylus.ko",
+            "touchscreen module=goog_usi_stylus state=already-loaded",
+            "touchscreen module=goog_usi_stylus state=loaded",
+            "touchscreen module=goog_usi_stylus state=failed",
+            envp
+        )
+    ) {
+        tfb_create_presence_marker(
+            "/dev/treeforge-bootstrap-touchscreen-degraded"
+        );
+
+        tfb_log(
+            "touchscreen realization=degraded"
+        );
+
+        return 0;
+    }
+
+    if (
+        !tfb_busybox_insmod_if_missing(
+            "/sys/module/goog_touch_interface",
+            "/vendor/lib/modules/goog_touch_interface.ko",
+            "touchscreen module=goog_touch_interface state=already-loaded",
+            "touchscreen module=goog_touch_interface state=loaded",
+            "touchscreen module=goog_touch_interface state=failed",
+            envp
+        )
+    ) {
+        tfb_create_presence_marker(
+            "/dev/treeforge-bootstrap-touchscreen-degraded"
+        );
+
+        tfb_log(
+            "touchscreen realization=degraded"
+        );
+
+        return 0;
+    }
+
+    if (
+        !tfb_busybox_insmod_if_missing(
+            "/sys/module/nvt_touch",
+            "/vendor/lib/modules/nvt_touch.ko",
+            "touchscreen module=nvt_touch state=already-loaded",
+            "touchscreen module=nvt_touch state=loaded",
+            "touchscreen module=nvt_touch state=failed",
+            envp
+        )
+    ) {
+        tfb_create_presence_marker(
+            "/dev/treeforge-bootstrap-touchscreen-degraded"
+        );
+
+        tfb_log(
+            "touchscreen realization=degraded"
+        );
+
+        return 0;
+    }
+
+    /*
+     * nvt_touch registration/probe is synchronous with insmod, but
+     * leave a short deterministic settle window for its input-device
+     * publication before tfb_run_menu() scans /sys/class/input.
+     */
+    tfb_sleep_ms(
+        250
+    );
+
+    tfb_create_presence_marker(
+        "/dev/treeforge-bootstrap-touchscreen-ready"
+    );
+
+    tfb_log(
+        "touchscreen realization=ready"
+    );
+
+    return 1;
+}
+
+
+static long tfb_adb_service_pid = -1;
+
+
+static void tfb_start_adb_service(
+    char **envp
+) {
+    tfb_syscall3(
+        SYS_UNLINKAT,
+        AT_FDCWD,
+        (long)
+            "/dev/treeforge-bootstrap-adb-stop",
+        0
+    );
+
+    long child = tfb_syscall6(
+        SYS_CLONE,
+        TREEFORGE_BOOTSTRAP_SIGCHLD,
+        0,
+        0,
+        0,
+        0,
+        0
+    );
+
+    if (child < 0) {
+        tfb_transition_failure(
+            "treeforge-bootstrap-adb-service-clone"
+        );
+    }
+
+    if (child == 0) {
+        /* TFB_ANDROID_USB_PROCESS_GROUP_V4_1 */
+        tfb_syscall2(
+            SYS_SETPGID,
+            0,
+            0
+        );
+
+        char *argv[] = {
+            (char *)
+                "/dev/treeforge-bootstrap-runtime/"
+                "treeforge-bootstrap-adb-service",
+            0
+        };
+
+        tfb_close(
+            tfb_tty
+        );
+
+        tfb_close(
+            tfb_console
+        );
+
+        tfb_close(
+            tfb_kmsg
+        );
+
+        tfb_syscall3(
+            SYS_EXECVE,
+            (long)
+                "/dev/treeforge-bootstrap-runtime/"
+                "treeforge-bootstrap-adb-service",
+            (long) argv,
+            (long) envp
+        );
+
+        tfb_syscall1(
+            SYS_EXIT,
+            127
+        );
+
+        for (;;) {
+        }
+    }
+
+    /* Close the clone/setpgid race from the parent too. */
+    tfb_syscall2(
+        SYS_SETPGID,
+        child,
+        child
+    );
+
+    tfb_adb_service_pid =
+        child;
+
+    tfb_log(
+        "treeforge-bootstrap-adb-service=started"
     );
 }
 
 
+static void tfb_stop_adb_service(
+    void
+) {
+    if (
+        tfb_adb_service_pid
+        <= 0
+    ) {
+        return;
+    }
+
+    tfb_create_presence_marker(
+        "/dev/treeforge-bootstrap-adb-stop"
+    );
+
+    int status = 0;
+
+    for (
+        int attempt = 0;
+        attempt < 80;
+        attempt++
+    ) {
+        long result = tfb_syscall4(
+            SYS_WAIT4,
+            tfb_adb_service_pid,
+            (long) &status,
+            TREEFORGE_BOOTSTRAP_WAIT_WNOHANG,
+            0
+        );
+
+        if (
+            result
+            == tfb_adb_service_pid
+        ) {
+            tfb_adb_service_pid = -1;
+            return;
+        }
+
+        tfb_sleep_ms(
+            25
+        );
+    }
+
+    tfb_syscall2(
+        SYS_KILL,
+        -tfb_adb_service_pid,
+        TREEFORGE_BOOTSTRAP_SIGTERM
+    );
+
+    for (
+        int attempt = 0;
+        attempt < 20;
+        attempt++
+    ) {
+        long result = tfb_syscall4(
+            SYS_WAIT4,
+            tfb_adb_service_pid,
+            (long) &status,
+            TREEFORGE_BOOTSTRAP_WAIT_WNOHANG,
+            0
+        );
+
+        if (
+            result
+            == tfb_adb_service_pid
+        ) {
+            tfb_adb_service_pid = -1;
+            return;
+        }
+
+        tfb_sleep_ms(
+            25
+        );
+    }
+
+    tfb_syscall2(
+        SYS_KILL,
+        -tfb_adb_service_pid,
+        TREEFORGE_BOOTSTRAP_SIGKILL
+    );
+
+    tfb_syscall4(
+        SYS_WAIT4,
+        tfb_adb_service_pid,
+        (long) &status,
+        0,
+        0
+    );
+
+    tfb_adb_service_pid = -1;
+}
+
+
+
+
+static void tfb_release_adb_usb_resources_for_android(
+    void
+) {
+    /*
+     * TFB_ANDROID_USB_SURGICAL_RELEASE_V4_2
+     *
+     * Release only TreeForge's temporary ADB ownership.
+     * Android retains ownership of the configfs gadget hierarchy.
+     */
+
+    tfb_log(
+        "android-usb-handoff=surgical-release-begin"
+    );
+
+    long udc_fd = tfb_syscall3(
+        SYS_OPENAT,
+        AT_FDCWD,
+        (long)
+            "/config/usb_gadget/g1/UDC",
+        O_WRONLY
+    );
+
+    if (udc_fd >= 0) {
+        static const char empty_udc[] = "\n";
+
+        tfb_syscall3(
+            SYS_WRITE,
+            udc_fd,
+            (long) empty_udc,
+            1
+        );
+
+        tfb_syscall1(
+            SYS_CLOSE,
+            udc_fd
+        );
+    }
+
+    tfb_syscall3(
+        SYS_UNLINKAT,
+        AT_FDCWD,
+        (long)
+            "/config/usb_gadget/g1/configs/b.1/f1",
+        0
+    );
+
+    tfb_syscall2(
+        SYS_UMOUNT2,
+        (long)
+            "/dev/usb-ffs/adb",
+        MNT_DETACH
+    );
+
+    tfb_sleep_ms(
+        100
+    );
+
+    tfb_log(
+        "android-usb-handoff=surgical-release-end"
+    );
+}
+
+/*
+ * ================================================================
+ * TFB_ANDROID_TRANSITION_SCREEN_V17_2
+ * ================================================================
+ *
+ * This is intentionally a static handoff frame, not simulated boot
+ * progress. TreeForge ceases execution after the Android init exec,
+ * so the final frame simply remains in scanout until Android takes
+ * display ownership.
+ */
+static void tfb_ui_draw_transition_centered_text(
+    const char *value,
+    u32 y,
+    u32 scale,
+    u32 pixel
+) {
+    if (
+        !value
+        || scale == 0
+    ) {
+        return;
+    }
+
+    u32 width = (
+        tfb_fb_text_width(
+            value,
+            scale
+        )
+    );
+
+    u32 x = (
+        TFB_UI_LOGICAL_WIDTH > width
+        ? (
+            TFB_UI_LOGICAL_WIDTH
+            - width
+        ) / 2U
+        : 0U
+    );
+
+    tfb_ui_draw_text(
+        x,
+        y,
+        value,
+        scale,
+        pixel
+    );
+}
+
+
+static void tfb_render_android_transition(
+    void
+) {
+    if (
+        !tfb_fb_menu_active
+        || tfb_fb_menu_mapped_address < 0
+        || !tfb_ui_landscape_supported()
+    ) {
+        tfb_log(
+            "android-transition-screen=unavailable"
+        );
+
+        return;
+    }
+
+    const u32 background =
+        0x00060b12U;
+
+    const u32 panel =
+        0x000c1621U;
+
+    const u32 foreground =
+        0x00f4f8fbU;
+
+    const u32 dim =
+        0x008ca0b0U;
+
+    const u32 accent =
+        0x0000d4eeU;
+
+    /*
+     * Replace the complete menu with one deliberate handoff frame.
+     */
+    tfb_ui_fill_rect(
+        0U,
+        0U,
+        TFB_UI_LOGICAL_WIDTH,
+        TFB_UI_LOGICAL_HEIGHT,
+        background
+    );
+
+    /*
+     * Subtle central panel keeps visual continuity with the V17 menu.
+     */
+    tfb_ui_fill_rect(
+        500U,
+        300U,
+        1560U,
+        1000U,
+        panel
+    );
+
+    tfb_ui_outline_rect(
+        500U,
+        300U,
+        1560U,
+        1000U,
+        4U,
+        0x00283d4dU
+    );
+
+    tfb_ui_draw_transition_centered_text(
+        "TREEFORGE",
+        470U,
+        8U,
+        accent
+    );
+
+    tfb_ui_fill_rect(
+        820U,
+        610U,
+        920U,
+        4U,
+        accent
+    );
+
+    tfb_ui_draw_transition_centered_text(
+        "STARTING ANDROID",
+        690U,
+        7U,
+        foreground
+    );
+
+    tfb_ui_draw_transition_centered_text(
+        "SLOT A",
+        850U,
+        4U,
+        accent
+    );
+
+    tfb_ui_draw_transition_centered_text(
+        "HANDING OFF TO ANDROID",
+        970U,
+        3U,
+        dim
+    );
+
+    tfb_log(
+        "TFB_ANDROID_TRANSITION_SCREEN_V17_2"
+    );
+}
+
+
+static void tfb_menu_cleanup_for_transition(
+    long *inputs,
+    int created_input_directory,
+    int *created_input_nodes
+) {
+
+    tfb_stop_adb_service();
+
+    tfb_release_adb_usb_resources_for_android();
+
+    tfb_fb_menu_cleanup();
+
+    tfb_close_inputs(
+        inputs
+    );
+
+    tfb_cleanup_realized_input_nodes(
+        created_input_directory,
+        created_input_nodes
+    );
+
+    tfb_close(
+        tfb_tty
+    );
+
+    tfb_tty = -1;
+
+    tfb_close(
+        tfb_console
+    );
+
+    tfb_console = -1;
+
+    tfb_close(
+        tfb_kmsg
+    );
+
+    tfb_kmsg = -1;
+}
+
+
+static void tfb_menu_execute_action(
+    int action,
+    long *inputs,
+    int created_input_directory,
+    int *created_input_nodes
+) {
+    tfb_log(
+        tfb_menu_action_name(
+            action
+        )
+    );
+
+    if (
+        action
+        == TFB_ACTION_BOOT_ANDROID_SLOT_A
+    ) {
+        tfb_log(
+            "early-menu action="
+            "boot_android_slot_a"
+        );
+
+        tfb_render_android_transition();
+
+        tfb_menu_cleanup_for_transition(
+            inputs,
+            created_input_directory,
+            created_input_nodes
+        );
+
+        if (!tfb_runtime_envp) {
+            tfb_transition_failure(
+                "android-slot-a-env"
+            );
+        }
+
+        char *android_argv[] = {
+            (char *)
+                "/system/bin/init",
+            (char *)
+                "selinux_setup",
+            0
+        };
+
+        tfb_syscall3(
+            SYS_EXECVE,
+            (long)
+                "/system/bin/init",
+            (long)
+                android_argv,
+            (long)
+                tfb_runtime_envp
+        );
+
+        tfb_transition_failure(
+            "android-slot-a-exec"
+        );
+    }
+
+    if (
+        action
+        == TFB_ACTION_REBOOT_BOOTLOADER
+    ) {
+        tfb_log(
+            "early-menu action=reboot_bootloader"
+        );
+
+        tfb_menu_cleanup_for_transition(
+            inputs,
+            created_input_directory,
+            created_input_nodes
+        );
+
+        tfb_reboot_to(
+            "bootloader"
+        );
+
+        tfb_transition_failure(
+            "bootloader-reboot-returned"
+        );
+    }
+
+    /*
+     * Android Slot B and the configured alternate OS deliberately
+     * remain visible placeholders until their independent handoff
+     * contracts are implemented and hardware accepted.
+     */
+    tfb_menu_status =
+        "ACTION NOT IMPLEMENTED";
+
+    tfb_log(
+        "early-menu action=not-implemented"
+    );
+}
+
+
+
+
+/*
+ * ================================================================
+ * TFB_TOUCH_MENU_NAVIGATION_V16
+ * ================================================================
+ *
+ * The accepted NVT touchscreen reports native portrait coordinates:
+ *
+ *   X: 0..1599
+ *   Y: 0..2559
+ *
+ * No swap or inversion is required.
+ *
+ * Input-device identity is discovered dynamically through sysfs.
+ * Never hard-code /dev/input/event2.
+ *
+ * Touch deliberately shares the exact same menu activation path as
+ * KEY_POWER.  Volume Up/Down/Power remain fully functional.
+ */
+
+struct tfb_touch_state {
+    int slot;
+    int active;
+
+    int have_x;
+    int have_y;
+
+    int raw_x;
+    int raw_y;
+
+    int start_set;
+    int start_x;
+    int start_y;
+
+    int pressed_row;
+    int canceled;
+};
+
+
+static void tfb_touch_reset_state(
+    struct tfb_touch_state *state
+) {
+    if (!state) {
+        return;
+    }
+
+    state->slot = 0;
+    state->active = 0;
+
+    state->have_x = 0;
+    state->have_y = 0;
+
+    state->raw_x = 0;
+    state->raw_y = 0;
+
+    state->start_set = 0;
+    state->start_x = 0;
+    state->start_y = 0;
+
+    state->pressed_row = -1;
+    state->canceled = 0;
+}
+
+
+static int tfb_touch_abs_int(
+    int value
+) {
+    return (
+        value < 0
+        ? -value
+        : value
+    );
+}
+
+
+static void tfb_runtime_sysfs_event_name_path(
+    int index,
+    char *output
+) {
+    static const char prefix[] =
+        "/sys/class/input/event";
+
+    static const char suffix[] =
+        "/device/name";
+
+    int position = 0;
+
+    for (
+        int i = 0;
+        prefix[i] != '\0';
+        i++
+    ) {
+        output[position++] =
+            prefix[i];
+    }
+
+    if (index >= 10) {
+        output[position++] = (
+            '0'
+            + (
+                index
+                / 10
+            )
+        );
+    }
+
+    output[position++] = (
+        '0'
+        + (
+            index
+            % 10
+        )
+    );
+
+    for (
+        int i = 0;
+        suffix[i] != '\0';
+        i++
+    ) {
+        output[position++] =
+            suffix[i];
+    }
+
+    output[position] = '\0';
+}
+
+
+static int tfb_input_is_touchscreen(
+    int index
+) {
+    char path[80];
+
+    tfb_runtime_sysfs_event_name_path(
+        index,
+        path
+    );
+
+    long fd = tfb_open(
+        path,
+        O_RDONLY
+    );
+
+    if (fd < 0) {
+        return 0;
+    }
+
+    char name[64];
+
+    long amount = tfb_syscall3(
+        SYS_READ,
+        fd,
+        (long) name,
+        (long) (
+            sizeof(name)
+            - 1
+        )
+    );
+
+    tfb_close(
+        fd
+    );
+
+    if (amount <= 0) {
+        return 0;
+    }
+
+    while (
+        amount > 0
+        && (
+            name[amount - 1] == '\n'
+            || name[amount - 1] == '\r'
+        )
+    ) {
+        amount--;
+    }
+
+    name[amount] = '\0';
+
+    return tfb_string_equal(
+        name,
+        "NVTCapacitiveTouchScreen"
+    );
+}
+
+
+
+static int tfb_menu_touch_row(
+    const struct tfb_menu_page *page,
+    int raw_x,
+    int raw_y
+) {
+    if (
+        !page
+        || !tfb_fb_menu_active
+        || !tfb_ui_landscape_supported()
+        || raw_x < 0
+        || raw_x >= TFB_TOUCH_RAW_WIDTH
+        || raw_y < 0
+        || raw_y >= TFB_TOUCH_RAW_HEIGHT
+    ) {
+        return -1;
+    }
+
+    struct tfb_ui_menu_geometry geometry;
+
+    if (
+        !tfb_ui_menu_geometry(
+            page,
+            &geometry
+        )
+    ) {
+        return -1;
+    }
+
+    /*
+     * Inverse of the renderer's clockwise logical-landscape transform.
+     *
+     * raw panel:  1600 x 2560
+     * logical UI: 2560 x 1600
+     */
+    u32 logical_x = (
+        TFB_UI_LOGICAL_WIDTH
+        - 1U
+        - (
+            (u32) (
+                (
+                    (unsigned long) raw_y
+                    * (unsigned long)
+                        TFB_UI_LOGICAL_WIDTH
+                )
+                / (unsigned long)
+                    TFB_TOUCH_RAW_HEIGHT
+            )
+        )
+    );
+
+    u32 logical_y = (
+        (u32) (
+            (
+                (unsigned long) raw_x
+                * (unsigned long)
+                    TFB_UI_LOGICAL_HEIGHT
+            )
+            / (unsigned long)
+                TFB_TOUCH_RAW_WIDTH
+        )
+    );
+
+    if (
+        logical_x < geometry.x
+        || logical_x
+            >= geometry.x
+                + geometry.width
+    ) {
+        return -1;
+    }
+
+    for (
+        int index = 0;
+        index < geometry.item_count;
+        index++
+    ) {
+        u32 row_y = (
+            geometry.y
+            + (
+                (u32) index
+                * (
+                    geometry.row_height
+                    + geometry.row_gap
+                )
+            )
+        );
+
+        if (
+            logical_y >= row_y
+            && logical_y
+                < row_y
+                    + geometry.row_height
+        ) {
+            return index;
+        }
+    }
+
+    return -1;
+}
+
+
+/*
+ * Return values:
+ *
+ *   0 = event is not handled by touch
+ *   1 = touch event consumed, no UI change
+ *   2 = row selected/highlight changed
+ *   3 = completed tap should activate selection
+ */
+static int tfb_touch_process_event(
+    struct tfb_touch_state *state,
+    const struct tfb_menu_page *page,
+    const struct tfb_input_event *event,
+    int *selected
+) {
+    if (
+        !state
+        || !event
+        || !selected
+        || event->type != EV_ABS
+    ) {
+        return 0;
+    }
+
+    if (
+        event->code
+        == ABS_MT_SLOT
+    ) {
+        state->slot =
+            event->value;
+
+        return 1;
+    }
+
+    /*
+     * The menu intentionally consumes only the primary contact.
+     * Additional fingers never activate menu entries.
+     */
+    if (state->slot != 0) {
+        return 1;
+    }
+
+    if (
+        event->code
+        == ABS_MT_TRACKING_ID
+    ) {
+        if (event->value >= 0) {
+            state->active = 1;
+
+            state->have_x = 0;
+            state->have_y = 0;
+
+            state->start_set = 0;
+            state->pressed_row = -1;
+            state->canceled = 0;
+
+            return 1;
+        }
+
+        if (!state->active) {
+            return 1;
+        }
+
+        int release_row = -1;
+
+        if (
+            state->have_x
+            && state->have_y
+        ) {
+            release_row = (
+                tfb_menu_touch_row(
+                    page,
+                    state->raw_x,
+                    state->raw_y
+                )
+            );
+        }
+
+        int activate = (
+            state->start_set
+            && !state->canceled
+            && state->pressed_row >= 0
+            && release_row
+                == state->pressed_row
+            && tfb_touch_abs_int(
+                state->raw_x
+                - state->start_x
+            )
+                <= TFB_TOUCH_TAP_SLOP
+            && tfb_touch_abs_int(
+                state->raw_y
+                - state->start_y
+            )
+                <= TFB_TOUCH_TAP_SLOP
+        );
+
+        state->active = 0;
+        state->have_x = 0;
+        state->have_y = 0;
+        state->start_set = 0;
+        state->pressed_row = -1;
+        state->canceled = 0;
+
+        return (
+            activate
+            ? 3
+            : 1
+        );
+    }
+
+    if (!state->active) {
+        return 1;
+    }
+
+    if (
+        event->code
+        == ABS_MT_POSITION_X
+    ) {
+        state->raw_x =
+            event->value;
+
+        state->have_x = 1;
+    } else if (
+        event->code
+        == ABS_MT_POSITION_Y
+    ) {
+        state->raw_y =
+            event->value;
+
+        state->have_y = 1;
+    } else {
+        return 1;
+    }
+
+    if (
+        state->have_x
+        && state->have_y
+        && !state->start_set
+    ) {
+        state->start_x =
+            state->raw_x;
+
+        state->start_y =
+            state->raw_y;
+
+        state->start_set = 1;
+
+        state->pressed_row = (
+            tfb_menu_touch_row(
+                page,
+                state->raw_x,
+                state->raw_y
+            )
+        );
+
+        if (
+            state->pressed_row
+            >= 0
+        ) {
+            *selected =
+                state->pressed_row;
+
+            return 2;
+        }
+
+        /*
+         * A contact that begins outside a menu row can never become
+         * an activating tap merely by moving onto one later.
+         */
+        state->canceled = 1;
+
+        return 1;
+    }
+
+    if (
+        state->have_x
+        && state->have_y
+        && state->start_set
+        && !state->canceled
+    ) {
+        int current_row = (
+            tfb_menu_touch_row(
+                page,
+                state->raw_x,
+                state->raw_y
+            )
+        );
+
+        if (
+            tfb_touch_abs_int(
+                state->raw_x
+                - state->start_x
+            )
+                > TFB_TOUCH_TAP_SLOP
+            || tfb_touch_abs_int(
+                state->raw_y
+                - state->start_y
+            )
+                > TFB_TOUCH_TAP_SLOP
+            || current_row
+                != state->pressed_row
+        ) {
+            /*
+             * Cancellation is sticky for this contact. Returning to
+             * the original row before release must not reactivate it.
+             */
+            state->canceled = 1;
+        }
+    }
+
+    return 1;
+}
+
+
+/*
+ * One canonical menu-selection execution path.
+ *
+ * KEY_POWER and a completed touchscreen tap both arrive here.
+ */
+static void tfb_menu_activate_selected(
+    const struct tfb_menu_page **page,
+    const struct tfb_menu_page **page_stack,
+    int *stack_depth,
+    int *selected,
+    u32 *elapsed_ms,
+    int *timeout_fired,
+    int *redraw,
+    long *inputs,
+    int created_input_directory,
+    int *created_input_nodes
+) {
+    if (
+        !page
+        || !*page
+        || !page_stack
+        || !stack_depth
+        || !selected
+        || !elapsed_ms
+        || !timeout_fired
+        || !redraw
+    ) {
+        return;
+    }
+
+    const struct tfb_menu_entry
+        *entry = (
+            tfb_menu_visible_entry(
+                *page,
+                *selected
+            )
+        );
+
+    if (!entry) {
+        tfb_menu_status =
+            "INVALID SELECTION";
+
+        *redraw |=
+            TFB_REDRAW_STATUS;
+
+        return;
+    }
+
+    if (
+        entry->submenu
+    ) {
+        if (
+            *stack_depth
+            >= TFB_MENU_STACK_DEPTH
+        ) {
+            tfb_menu_status =
+                "SUBMENU DEPTH LIMIT";
+
+            *redraw |=
+                TFB_REDRAW_STATUS;
+
+            return;
+        }
+
+        page_stack[
+            *stack_depth
+        ] = entry->submenu;
+
+        (*stack_depth)++;
+
+        *page =
+            entry->submenu;
+
+        *selected = (
+            tfb_menu_default_selection(
+                *page
+            )
+        );
+
+        tfb_menu_status = 0;
+        *elapsed_ms = 0;
+        *timeout_fired = 0;
+
+        tfb_log(
+            "early-menu submenu=enter"
+        );
+
+        *redraw |=
+            TFB_REDRAW_FULL;
+
+        return;
+    }
+
+    if (
+        entry->action
+        == TFB_ACTION_BACK
+    ) {
+        if (
+            *stack_depth > 1
+        ) {
+            (*stack_depth)--;
+
+            *page = (
+                page_stack[
+                    *stack_depth - 1
+                ]
+            );
+
+            *selected = (
+                tfb_menu_default_selection(
+                    *page
+                )
+            );
+
+            tfb_menu_status = 0;
+
+            tfb_log(
+                "early-menu submenu=back"
+            );
+
+            *redraw |=
+                TFB_REDRAW_FULL;
+        } else {
+            tfb_menu_status =
+                "ALREADY AT MAIN MENU";
+
+            *redraw |=
+                TFB_REDRAW_STATUS;
+        }
+
+        return;
+    }
+
+    tfb_menu_execute_action(
+        entry->action,
+        inputs,
+        created_input_directory,
+        created_input_nodes
+    );
+
+    /*
+     * Implemented transition actions never return.  A returning action
+     * therefore changed only tfb_menu_status.
+     */
+    *redraw |=
+        TFB_REDRAW_STATUS;
+}
+
+
 __attribute__((noreturn))
-static void pp_run_menu(void) {
+static void tfb_run_menu(void) {
     int created_input_directory = 0;
 
     int created_input_nodes[
@@ -3666,7 +7276,9 @@ static void pp_run_menu(void) {
 
     int sysfs_devices_seen = 0;
 
-    pp_realize_input_nodes(
+    int last_adb_connected = -1;
+
+    tfb_realize_input_nodes(
         &created_input_directory,
         created_input_nodes,
         &sysfs_devices_seen
@@ -3676,19 +7288,33 @@ static void pp_run_menu(void) {
         INPUT_COUNT
     ];
 
+    int touch_inputs[
+        INPUT_COUNT
+    ];
+
+    struct tfb_touch_state
+        touch_states[
+            INPUT_COUNT
+        ];
+
     for (
         int index = 0;
         index < INPUT_COUNT;
         index++
     ) {
         inputs[index] = -1;
+        touch_inputs[index] = 0;
+
+        tfb_touch_reset_state(
+            &touch_states[index]
+        );
     }
 
-    long marker = pp_syscall4(
+    long marker = tfb_syscall4(
         SYS_OPENAT,
         AT_FDCWD,
         (long)
-            "/dev/pixel-partitioner-early-menu",
+            "/dev/treeforge-bootstrap-early-menu",
         O_WRONLY
         | O_CREAT
         | O_TRUNC,
@@ -3696,24 +7322,27 @@ static void pp_run_menu(void) {
     );
 
     if (marker >= 0) {
-        pp_write_all(
+        tfb_write_all(
             marker,
-            "pixel-partitioner-early-menu-v1\n"
+            "treeforge-bootstrap-early-menu-v1\n"
         );
 
-        pp_close(
+        tfb_close(
             marker
         );
     }
 
-    pp_probe_display_surfaces();
+    tfb_probe_display_surfaces();
 
-    if (sysfs_devices_seen > 0) {
-        pp_log(
+    if (
+        sysfs_devices_seen
+        > 0
+    ) {
+        tfb_log(
             "early-menu input-sysfs=present"
         );
     } else {
-        pp_log(
+        tfb_log(
             "early-menu input-sysfs=absent"
         );
     }
@@ -3725,84 +7354,173 @@ static void pp_run_menu(void) {
     ) {
         char event_path[32];
 
-        pp_event_path(
+        tfb_event_path(
             index,
             event_path
         );
 
-        inputs[index] = pp_open(
+        inputs[index] = tfb_open(
             event_path,
             O_RDONLY
             | O_NONBLOCK
         );
 
-        if (inputs[index] < 0) {
+        if (
+            inputs[index]
+            < 0
+        ) {
             continue;
         }
 
-        for (;;) {
-            struct pp_input_event event;
+        touch_inputs[index] = (
+            tfb_input_is_touchscreen(
+                index
+            )
+        );
 
-            long amount = pp_syscall3(
-                SYS_READ,
-                inputs[index],
-                (long) &event,
-                (long) sizeof(event)
+        tfb_touch_reset_state(
+            &touch_states[index]
+        );
+
+        /*
+         * Drain stale key state before displaying the live menu.
+         */
+        for (;;) {
+            struct tfb_input_event
+                event;
+
+            long amount = (
+                tfb_syscall3(
+                    SYS_READ,
+                    inputs[index],
+                    (long) &event,
+                    (long) sizeof(event)
+                )
             );
 
             if (
                 amount
-                != (long) sizeof(event)
+                != (long)
+                    sizeof(event)
             ) {
                 break;
             }
         }
     }
 
-    int selected = 0;
+    const struct tfb_menu_page
+        *page_stack[
+            TFB_MENU_STACK_DEPTH
+        ];
 
-    pp_log(
+    int stack_depth = 1;
+
+    page_stack[0] = (
+        tfb_menu_root_page()
+    );
+
+    const struct tfb_menu_page
+        *page = page_stack[0];
+
+    int selected = (
+        tfb_menu_default_selection(
+            page
+        )
+    );
+
+    u32 elapsed_ms = 0;
+    int timeout_fired = 0;
+
+    tfb_menu_status = 0;
+
+    tfb_log(
+        tfb_menu_profile_marker
+    );
+
+    tfb_log(
+        tfb_menu_profile_id
+    );
+
+    tfb_log(
         "early-menu begin"
     );
 
-    pp_render(
-        selected
+    tfb_render(
+        page,
+        selected,
+        elapsed_ms,
+        timeout_fired
+    );
+
+    int rendered_selected =
+        selected;
+
+    last_adb_connected =
+        tfb_adb_connected();
+
+    tfb_log(
+        "TFB_DIRTY_REGION_REDRAW_V17_1C"
     );
 
     for (;;) {
+        int redraw = 0;
+
         for (
             int index = 0;
             index < INPUT_COUNT;
             index++
         ) {
-            if (inputs[index] < 0) {
+            if (
+                inputs[index]
+                < 0
+            ) {
                 char event_path[32];
 
-                pp_event_path(
+                tfb_event_path(
                     index,
                     event_path
                 );
 
-                inputs[index] = pp_open(
-                    event_path,
-                    O_RDONLY
-                    | O_NONBLOCK
+                inputs[index] = (
+                    tfb_open(
+                        event_path,
+                        O_RDONLY
+                        | O_NONBLOCK
+                    )
                 );
 
-                if (inputs[index] >= 0) {
-                    for (;;) {
-                        struct pp_input_event event;
+                if (
+                    inputs[index]
+                    >= 0
+                ) {
+                    touch_inputs[index] = (
+                        tfb_input_is_touchscreen(
+                            index
+                        )
+                    );
 
-                        long amount = pp_syscall3(
-                            SYS_READ,
-                            inputs[index],
-                            (long) &event,
-                            (long) sizeof(event)
+                    tfb_touch_reset_state(
+                        &touch_states[index]
+                    );
+
+                    for (;;) {
+                        struct tfb_input_event
+                            event;
+
+                        long amount = (
+                            tfb_syscall3(
+                                SYS_READ,
+                                inputs[index],
+                                (long) &event,
+                                (long)
+                                    sizeof(event)
+                            )
                         );
 
                         if (
                             amount
-                            != (long) sizeof(event)
+                            != (long)
+                                sizeof(event)
                         ) {
                             break;
                         }
@@ -3812,36 +7530,102 @@ static void pp_run_menu(void) {
                 }
             }
 
-            if (inputs[index] < 0) {
+            if (
+                inputs[index]
+                < 0
+            ) {
                 continue;
             }
 
             for (;;) {
-                struct pp_input_event event;
+                struct tfb_input_event
+                    event;
 
-                long amount = pp_syscall3(
-                    SYS_READ,
-                    inputs[index],
-                    (long) &event,
-                    (long) sizeof(event)
+                long amount = (
+                    tfb_syscall3(
+                        SYS_READ,
+                        inputs[index],
+                        (long) &event,
+                        (long) sizeof(event)
+                    )
                 );
 
                 if (
                     amount
-                    != (long) sizeof(event)
+                    != (long)
+                        sizeof(event)
                 ) {
                     if (
                         amount < 0
                         && amount != -11
                     ) {
-                        pp_close(
+                        tfb_close(
                             inputs[index]
                         );
 
-                        inputs[index] = -1;
+                        inputs[index] =
+                            -1;
                     }
 
                     break;
+                }
+
+                if (
+                    touch_inputs[index]
+                    && event.type == EV_ABS
+                ) {
+                    int touch_result = (
+                        tfb_touch_process_event(
+                            &touch_states[index],
+                            page,
+                            &event,
+                            &selected
+                        )
+                    );
+
+                    if (touch_result != 0) {
+                        elapsed_ms = 0;
+                        timeout_fired = 0;
+                        tfb_menu_status = 0;
+                    }
+
+                    if (touch_result == 2) {
+                        tfb_log(
+                            "early-menu touch=select"
+                        );
+
+                        redraw |= (
+                            TFB_REDRAW_SELECTION
+                            | TFB_REDRAW_STATUS
+                        );
+
+                        continue;
+                    }
+
+                    if (touch_result == 3) {
+                        tfb_log(
+                            "early-menu touch=activate"
+                        );
+
+                        tfb_menu_activate_selected(
+                            &page,
+                            page_stack,
+                            &stack_depth,
+                            &selected,
+                            &elapsed_ms,
+                            &timeout_fired,
+                            &redraw,
+                            inputs,
+                            created_input_directory,
+                            created_input_nodes
+                        );
+
+                        continue;
+                    }
+
+                    if (touch_result != 0) {
+                        continue;
+                    }
                 }
 
                 if (
@@ -3851,18 +7635,29 @@ static void pp_run_menu(void) {
                     continue;
                 }
 
+                elapsed_ms = 0;
+                timeout_fired = 0;
+                tfb_menu_status = 0;
+
                 if (
                     event.code
                     == KEY_VOLUMEUP
                 ) {
-                    pp_log(
+                    tfb_log(
                         "early-menu key=volume_up"
                     );
 
-                    selected = 0;
+                    selected = (
+                        tfb_menu_move_selection(
+                            page,
+                            selected,
+                            -1
+                        )
+                    );
 
-                    pp_render(
-                        selected
+                    redraw |= (
+                        TFB_REDRAW_SELECTION
+                        | TFB_REDRAW_STATUS
                     );
 
                     continue;
@@ -3872,14 +7667,21 @@ static void pp_run_menu(void) {
                     event.code
                     == KEY_VOLUMEDOWN
                 ) {
-                    pp_log(
+                    tfb_log(
                         "early-menu key=volume_down"
                     );
 
-                    selected = 0;
+                    selected = (
+                        tfb_menu_move_selection(
+                            page,
+                            selected,
+                            1
+                        )
+                    );
 
-                    pp_render(
-                        selected
+                    redraw |= (
+                        TFB_REDRAW_SELECTION
+                        | TFB_REDRAW_STATUS
                     );
 
                     continue;
@@ -3892,55 +7694,134 @@ static void pp_run_menu(void) {
                     continue;
                 }
 
-                pp_log(
+                tfb_log(
                     "early-menu key=power"
                 );
 
-                pp_log(
-                    "early-menu action=bootloader"
-                );
-
-                /*
-                 * Reboot is the only current standalone action.
-                 * Do not seal the framebuffer bridge here.
-                 */
-                pp_fb_menu_cleanup();
-
-                pp_close_inputs(
-                    inputs
-                );
-
-                pp_cleanup_realized_input_nodes(
+                tfb_menu_activate_selected(
+                    &page,
+                    page_stack,
+                    &stack_depth,
+                    &selected,
+                    &elapsed_ms,
+                    &timeout_fired,
+                    &redraw,
+                    inputs,
                     created_input_directory,
                     created_input_nodes
-                );
-
-                pp_close(
-                    pp_tty
-                );
-                pp_tty = -1;
-
-                pp_close(
-                    pp_console
-                );
-                pp_console = -1;
-
-                pp_close(
-                    pp_kmsg
-                );
-                pp_kmsg = -1;
-
-                pp_reboot_to(
-                    "bootloader"
-                );
-
-                pp_transition_failure(
-                    "bootloader-reboot-returned"
                 );
             }
         }
 
-        pp_sleep_ms(
+        if (
+            page->timeout_ms != 0
+            && !timeout_fired
+        ) {
+            if (
+                elapsed_ms
+                + POLL_INTERVAL_MS
+                >= page->timeout_ms
+            ) {
+                elapsed_ms =
+                    page->timeout_ms;
+
+                timeout_fired = 1;
+
+                tfb_log(
+                    "early-menu timeout"
+                );
+
+                tfb_menu_execute_action(
+                    page->timeout_action,
+                    inputs,
+                    created_input_directory,
+                    created_input_nodes
+                );
+
+                redraw |=
+                    TFB_REDRAW_STATUS;
+            } else {
+                u32 previous_second = (
+                    elapsed_ms
+                    / 1000U
+                );
+
+                elapsed_ms +=
+                    POLL_INTERVAL_MS;
+
+                if (
+                    elapsed_ms
+                    / 1000U
+                    != previous_second
+                ) {
+                    redraw |=
+                        TFB_REDRAW_STATUS;
+                }
+            }
+        }
+
+        int adb_connected =
+            tfb_adb_connected();
+
+        if (
+            adb_connected
+            != last_adb_connected
+        ) {
+            last_adb_connected =
+                adb_connected;
+
+            redraw |=
+                TFB_REDRAW_ADB;
+        }
+
+        if (
+            redraw
+            & TFB_REDRAW_FULL
+        ) {
+            tfb_render(
+                page,
+                selected,
+                elapsed_ms,
+                timeout_fired
+            );
+
+            rendered_selected =
+                selected;
+        } else {
+            if (
+                redraw
+                & TFB_REDRAW_SELECTION
+            ) {
+                tfb_fb_render_selection_delta(
+                    page,
+                    rendered_selected,
+                    selected
+                );
+
+                rendered_selected =
+                    selected;
+            }
+
+            if (
+                redraw
+                & TFB_REDRAW_STATUS
+            ) {
+                tfb_fb_render_status_region(
+                    page,
+                    elapsed_ms,
+                    timeout_fired
+                );
+            }
+
+            if (
+                redraw
+                & TFB_REDRAW_ADB
+            ) {
+                tfb_fb_render_adb_region();
+            }
+        }
+
+        tfb_sleep_ms(
             POLL_INTERVAL_MS
         );
     }
@@ -3948,7 +7829,7 @@ static void pp_run_menu(void) {
 
 
 __attribute__((noreturn))
-static void pp_main(
+static void tfb_main(
     long argc,
     char **argv,
     char **envp
@@ -3963,61 +7844,84 @@ static void pp_main(
     if (argc > 1) {
         if (
             !argv[1]
-            || !pp_string_equal(
+            || !tfb_string_equal(
                 argv[1],
                 "selinux_setup"
             )
         ) {
-            pp_transition_failure(
-                "invalid-pixel-partitioner-reentry"
+            tfb_transition_failure(
+                "invalid-treeforge-bootstrap-reentry"
             );
         }
 
-        pp_kmsg = pp_open(
+        tfb_kmsg = tfb_open(
             "/dev/kmsg",
             O_WRONLY
             | O_NONBLOCK
         );
 
-        pp_tty = pp_open(
+        tfb_tty = tfb_open(
             "/dev/tty0",
             O_WRONLY
             | O_NONBLOCK
         );
 
-        pp_console = pp_open(
+        tfb_console = tfb_open(
             "/dev/console",
             O_WRONLY
             | O_NONBLOCK
         );
 
         if (
-            !pp_materialize_runtime_bundle()
+            !tfb_materialize_runtime_bundle()
         ) {
-            pp_transition_failure(
-                "pixel-partitioner-runtime-materialize"
+            tfb_transition_failure(
+                "treeforge-bootstrap-runtime-materialize"
             );
         }
 
-        pp_log(
-            "pixel-partitioner-runtime=materialized"
+        tfb_log(
+            "treeforge-bootstrap-runtime=materialized"
         );
 
         /*
          * The complete retained runtime now exists under /dev.
          * The inherited dispatcher FD is no longer needed.
          */
-        pp_close(
-            PIXEL_PARTITIONER_TRANSITION_FD
+        tfb_close(
+            TREEFORGE_BOOTSTRAP_TRANSITION_FD
         );
 
-        pp_prepare_shell_compat();
+        tfb_runtime_envp =
+            envp;
 
-        pp_start_adb_service(
+        tfb_menu_load_runtime_state();
+
+        /*
+         * TFB_TOUCHSCREEN_MODULE_REALIZATION_V14
+         *
+         * The matching vendor module tree is already mounted by
+         * Google first-stage. Realize the three remaining touch
+         * roots before tfb_run_menu() performs its existing generic
+         * /sys/class/input/event* -> /dev/input/event* realization.
+         *
+         * Failure is intentionally non-fatal: hardware-key menu
+         * control remains available.
+         */
+        tfb_realize_touchscreen_modules(
             envp
         );
 
-        pp_run_menu();
+        /*
+         * Do not alter Android's live /bin or /system/bin namespace.
+         * TreeForge's standalone ADB runtime is fully self-contained
+         * under /dev/treeforge-bootstrap-runtime.
+         */
+        tfb_start_adb_service(
+            envp
+        );
+
+        tfb_run_menu();
     }
 
     /*
@@ -4027,39 +7931,39 @@ static void pp_main(
      * and the appended TreeForge Bootstrap runtime bundle through Google's
      * currently proven FirstStageMain boundary.
      */
-    long self_fd = pp_open(
+    long self_fd = tfb_open(
         "/init",
         O_RDONLY
     );
 
     if (self_fd < 0) {
-        pp_transition_failure(
+        tfb_transition_failure(
             "transition-fd-open"
         );
     }
 
     if (
         self_fd
-        != PIXEL_PARTITIONER_TRANSITION_FD
+        != TREEFORGE_BOOTSTRAP_TRANSITION_FD
     ) {
-        long duplicated = pp_syscall3(
+        long duplicated = tfb_syscall3(
             SYS_DUP3,
             self_fd,
-            PIXEL_PARTITIONER_TRANSITION_FD,
+            TREEFORGE_BOOTSTRAP_TRANSITION_FD,
             0
         );
 
         if (duplicated < 0) {
-            pp_close(
+            tfb_close(
                 self_fd
             );
 
-            pp_transition_failure(
+            tfb_transition_failure(
                 "transition-fd-duplicate"
             );
         }
 
-        pp_close(
+        tfb_close(
             self_fd
         );
     }
@@ -4069,21 +7973,21 @@ static void pp_main(
         0
     };
 
-    pp_syscall3(
+    tfb_syscall3(
         SYS_EXECVE,
         (long)
-            "/init.pixel-partitioner-first-stage",
+            "/init.treeforge-bootstrap-first-stage",
         (long) first_stage_argv,
         (long) envp
     );
 
-    pp_transition_failure(
+    tfb_transition_failure(
         "first-stage-exec"
     );
 }
 
 __attribute__((used, noreturn))
-static void pp_entry(
+static void tfb_entry(
     usize *initial_stack
 ) {
     long argc = (
@@ -4103,7 +8007,7 @@ static void pp_entry(
         + 1
     );
 
-    pp_main(
+    tfb_main(
         argc,
         argv,
         envp
@@ -4114,7 +8018,7 @@ __attribute__((naked, noreturn))
 void _start(void) {
     __asm__ volatile(
         "mov x0, sp\n"
-        "b pp_entry\n"
+        "b tfb_entry\n"
     );
 }
 
@@ -4195,6 +8099,383 @@ void _start(void) {
         ).resolve()
 
     @staticmethod
+    def _c_string(
+        value: str,
+    ) -> str:
+        return (
+            '"'
+            + value
+            .replace(
+                "\\",
+                "\\\\",
+            )
+            .replace(
+                '"',
+                '\\"',
+            )
+            + '"'
+        )
+
+    @classmethod
+    def _menu_c_source(
+        cls,
+        profile: MenuProfile,
+    ) -> str:
+        if not isinstance(
+            profile,
+            MenuProfile,
+        ):
+            raise TypeError(
+                "profile must be a MenuProfile"
+            )
+
+        action_names = {
+            None:
+                "TFB_ACTION_NONE",
+
+            MenuAction.BOOT_ANDROID_SLOT_A:
+                "TFB_ACTION_BOOT_ANDROID_SLOT_A",
+
+            MenuAction.BOOT_ANDROID_SLOT_B:
+                "TFB_ACTION_BOOT_ANDROID_SLOT_B",
+
+            MenuAction.BOOT_ALTERNATE_OS:
+                "TFB_ACTION_BOOT_ALTERNATE_OS",
+
+            MenuAction.BOOT_ROOTED_ANDROID:
+                "TFB_ACTION_BOOT_ROOTED_ANDROID",
+
+            MenuAction.INSTALL_ROOT:
+                "TFB_ACTION_INSTALL_ROOT",
+
+            MenuAction.UNINSTALL_ROOT:
+                "TFB_ACTION_UNINSTALL_ROOT",
+
+            MenuAction.TOGGLE_ROOT_PERSISTENCE:
+                "TFB_ACTION_TOGGLE_ROOT_PERSISTENCE",
+
+            MenuAction.REBOOT_BOOTLOADER:
+                "TFB_ACTION_REBOOT_BOOTLOADER",
+
+            MenuAction.REBOOT_RECOVERY:
+                "TFB_ACTION_REBOOT_RECOVERY",
+
+            MenuAction.BACK:
+                "TFB_ACTION_BACK",
+        }
+
+        condition_names = {
+            MenuCondition.ALWAYS:
+                "TFB_CONDITION_ALWAYS",
+
+            MenuCondition.FULL_AB:
+                "TFB_CONDITION_FULL_AB",
+
+            MenuCondition.ALTERNATE_OS_CONFIGURED:
+                "TFB_CONDITION_ALTERNATE_OS_CONFIGURED",
+
+            MenuCondition.ROOT_INSTALLED:
+                "TFB_CONDITION_ROOT_INSTALLED",
+
+            MenuCondition.ROOT_NOT_INSTALLED:
+                "TFB_CONDITION_ROOT_NOT_INSTALLED",
+        }
+
+        label_state_names = {
+            MenuLabelState.NONE:
+                "TFB_LABEL_STATE_NONE",
+
+            MenuLabelState.ROOT_PERSISTENCE:
+                "TFB_LABEL_STATE_ROOT_PERSISTENCE",
+
+            MenuLabelState.ALTERNATE_OS_NAME:
+                "TFB_LABEL_STATE_ALTERNATE_OS_NAME",
+        }
+
+        icon_names = {
+            MenuIcon.NONE:
+                "TFB_MENU_ICON_NONE",
+
+            MenuIcon.ANDROID:
+                "TFB_MENU_ICON_ANDROID",
+
+            MenuIcon.RECOVERY:
+                "TFB_MENU_ICON_RECOVERY",
+
+            MenuIcon.MAINTENANCE:
+                "TFB_MENU_ICON_MAINTENANCE",
+
+            MenuIcon.ALTERNATE_OS:
+                "TFB_MENU_ICON_ALTERNATE_OS",
+
+            MenuIcon.ROOT:
+                "TFB_MENU_ICON_ROOT",
+
+            MenuIcon.PIXEL_PARTITIONER:
+                "TFB_MENU_ICON_PIXEL_PARTITIONER",
+
+            MenuIcon.BOOTLOADER:
+                "TFB_MENU_ICON_BOOTLOADER",
+
+            MenuIcon.BACK:
+                "TFB_MENU_ICON_BACK",
+        }
+
+        def symbol(
+            page: MenuPage,
+        ) -> str:
+            profile_name = (
+                profile.profile_id
+                .replace(
+                    "-",
+                    "_",
+                )
+            )
+
+            page_name = (
+                page.page_id
+                .replace(
+                    "-",
+                    "_",
+                )
+            )
+
+            return (
+                "tfb_profile_"
+                + profile_name
+                + "_"
+                + page_name
+            )
+
+        emitted: set[str] = set()
+        blocks: list[str] = []
+
+        def emit(
+            page: MenuPage,
+        ) -> None:
+            page_symbol = symbol(
+                page
+            )
+
+            if page_symbol in emitted:
+                return
+
+            for entry in page.entries:
+                if entry.submenu is not None:
+                    emit(
+                        entry.submenu
+                    )
+
+            entry_symbol = (
+                page_symbol
+                + "_entries"
+            )
+
+            lines = [
+                "static const struct tfb_menu_entry",
+                f"{entry_symbol}[] = {{",
+            ]
+
+            for entry in page.entries:
+                submenu = (
+                    "0"
+                    if entry.submenu is None
+                    else (
+                        "&"
+                        + symbol(
+                            entry.submenu
+                        )
+                    )
+                )
+
+                lines.extend(
+                    (
+                        "    {",
+                        (
+                            "        "
+                            + cls._c_string(
+                                entry.label
+                            )
+                            + ","
+                        ),
+                        (
+                            "        "
+                            + cls._c_string(
+                                entry.description
+                            )
+                            + ","
+                        ),
+                        (
+                            "        "
+                            + icon_names[
+                                entry.icon
+                            ]
+                            + ","
+                        ),
+                        (
+                            "        "
+                            + action_names[
+                                entry.action
+                            ]
+                            + ","
+                        ),
+                        (
+                            "        "
+                            + submenu
+                            + ","
+                        ),
+                        (
+                            "        "
+                            + condition_names[
+                                entry.visible_if
+                            ]
+                            + ","
+                        ),
+                        (
+                            "        "
+                            + label_state_names[
+                                entry.label_state
+                            ]
+                        ),
+                        "    },",
+                    )
+                )
+
+            lines.append(
+                "};"
+            )
+
+            default_index = next(
+                index
+                for index, entry
+                in enumerate(
+                    page.entries
+                )
+                if (
+                    entry.entry_id
+                    == page.default_entry
+                )
+            )
+
+            timeout_action = (
+                action_names[
+                    page.timeout_action
+                ]
+            )
+
+            lines.extend(
+                (
+                    "",
+                    (
+                        "static const struct "
+                        "tfb_menu_page "
+                        + page_symbol
+                        + " = {"
+                    ),
+                    (
+                        "    "
+                        + cls._c_string(
+                            page.title
+                        )
+                        + ","
+                    ),
+                    (
+                        "    "
+                        + cls._c_string(
+                            page.subtitle
+                        )
+                        + ","
+                    ),
+                    (
+                        "    "
+                        + str(
+                            page.timeout_ms
+                        )
+                        + "U,"
+                    ),
+                    (
+                        "    "
+                        + timeout_action
+                        + ","
+                    ),
+                    (
+                        "    "
+                        + str(
+                            default_index
+                        )
+                        + ","
+                    ),
+                    (
+                        "    "
+                        + entry_symbol
+                        + ","
+                    ),
+                    (
+                        "    (int) (sizeof("
+                        + entry_symbol
+                        + ") / sizeof("
+                        + entry_symbol
+                        + "[0]))"
+                    ),
+                    "};",
+                )
+            )
+
+            blocks.append(
+                "\n".join(
+                    lines
+                )
+            )
+
+            emitted.add(
+                page_symbol
+            )
+
+        emit(
+            profile.root
+        )
+
+        root_symbol = symbol(
+            profile.root
+        )
+
+        blocks.append(
+            "\n".join(
+                (
+                    (
+                        "static const char "
+                        "tfb_menu_profile_marker[] = "
+                        '"TREEFORGE_MENU_PROFILE_V1";'
+                    ),
+                    (
+                        "static const char "
+                        "tfb_menu_profile_id[] = "
+                        + cls._c_string(
+                            profile.profile_id
+                        )
+                        + ";"
+                    ),
+                    "",
+                    (
+                        "static const struct "
+                        "tfb_menu_page *"
+                    ),
+                    "tfb_menu_root_page(void) {",
+                    (
+                        "    return &"
+                        + root_symbol
+                        + ";"
+                    ),
+                    "}",
+                )
+            )
+        )
+
+        return "\n\n".join(
+            blocks
+        )
+
+    @staticmethod
     def _project_version() -> str:
         # TreeForge Bootstrap owns this dispatcher independently
         # from the TreeForge Bootstrap repository.
@@ -4209,6 +8490,7 @@ void _start(void) {
         canonical_init: bytes,
         output_root: Path,
         runtime_bundle: bytes = b"",
+        menu_profile: MenuProfile | None = None,
     ) -> TreeForgeDispatcherBuild:
         if not isinstance(
             runtime_bundle,
@@ -4254,6 +8536,25 @@ void _start(void) {
                 "output_root must be a pathlib.Path"
             )
 
+        if menu_profile is None:
+            menu_profile = (
+                load_default_profile()
+            )
+
+        if not isinstance(
+            menu_profile,
+            MenuProfile,
+        ):
+            raise TypeError(
+                "menu_profile must be a MenuProfile"
+            )
+
+        menu_source = (
+            cls._menu_c_source(
+                menu_profile
+            )
+        )
+
         machine = cls._elf_machine(
             canonical_init
         )
@@ -4277,16 +8578,16 @@ void _start(void) {
 
         source_path = (
             output_root
-            / "pixel-partitioner-dispatch.c"
+            / "treeforge-bootstrap-dispatch.c"
         )
 
         executable_path = (
             output_root
-            / "pixel-partitioner-dispatch"
+            / "treeforge-bootstrap-dispatch"
         )
 
         placeholder = (
-            "__PIXEL_PARTITIONER_VERSION__"
+            "__TREEFORGE_BOOTSTRAP_VERSION__"
         )
 
         if (
@@ -4300,10 +8601,31 @@ void _start(void) {
                 "placeholder is not unique"
             )
 
+        profile_placeholder = (
+            "__TREEFORGE_MENU_PROFILE__"
+        )
+
+        if (
+            cls._SOURCE.count(
+                profile_placeholder
+            )
+            != 1
+        ):
+            raise TreeForgeDispatcherError(
+                "TreeForge Menu profile "
+                "placeholder is not unique"
+            )
+
         generated_source = (
-            cls._SOURCE.replace(
+            cls._SOURCE
+            .replace(
                 placeholder,
                 cls._project_version(),
+                1,
+            )
+            .replace(
+                profile_placeholder,
+                menu_source,
                 1,
             )
         )
@@ -4345,8 +8667,8 @@ void _start(void) {
 
         if completed.returncode != 0:
             raise TreeForgeDispatcherError(
-                "unable to build Pixel "
-                "Partitioner dispatcher:\n"
+                "unable to build TreeForge Bootstrap "
+                "dispatcher:\n"
                 + completed.stderr.decode(
                     "utf-8",
                     errors="replace",

@@ -39,19 +39,19 @@ CANONICAL_SHA256 = (
 )
 
 ORIGINAL_INIT_NAME = (
-    "init.pixel-partitioner-original"
+    "init.treeforge-bootstrap-original"
 )
 
 FIRST_STAGE_INIT_NAME = (
-    "init.pixel-partitioner-first-stage"
+    "init.treeforge-bootstrap-first-stage"
 )
 
 RETAINED_SOURCE_ROOT = (
-    "pixel-partitioner-retained"
+    "treeforge-bootstrap-retained"
 )
 
 RUNTIME_DESTINATION_ROOT = (
-    "/dev/pixel-partitioner-runtime"
+    "/dev/treeforge-bootstrap-runtime"
 )
 
 TRANSITION_SOURCE = (
@@ -194,7 +194,8 @@ def _retained_files(
     ] = []
 
     for name in (
-        "pixel-partitioner-adb-service",
+        "treeforge-bootstrap-adb-service",
+        "etc/treeforge-bootstrap-release",
     ):
         source = stage / name
 
@@ -489,7 +490,8 @@ def _payload_entries(
     )
 
     wanted_files = {
-        "pixel-partitioner-adb-service",
+        "treeforge-bootstrap-adb-service",
+        "etc/treeforge-bootstrap-release",
     }
 
     system = stage / "system"
@@ -808,13 +810,12 @@ def validate_canonical_initramfs(
         )
 
     for required in (
-        b"TREEFORGE MENU",
-        b"REBOOT BOOTLOADER",
+        b"TREEFORGE_MENU_PROFILE_V1",
         (
-            b"/dev/pixel-partitioner-runtime/"
-            b"pixel-partitioner-adb-service"
+            b"/dev/treeforge-bootstrap-runtime/"
+            b"treeforge-bootstrap-adb-service"
         ),
-        b"/dev/pixel_partitioner_fb",
+        b"/dev/treeforge_bootstrap_fb",
     ):
         if required not in candidate_init.data:
             raise CanonicalInitramfsError(
@@ -1138,7 +1139,11 @@ def validate_canonical_initramfs(
     required_runtime_destinations = (
         (
             RUNTIME_DESTINATION_ROOT
-            + "/pixel-partitioner-adb-service"
+            + "/treeforge-bootstrap-adb-service"
+        ),
+        (
+            RUNTIME_DESTINATION_ROOT
+            + "/etc/treeforge-bootstrap-release"
         ),
         (
             RUNTIME_DESTINATION_ROOT
@@ -1147,7 +1152,7 @@ def validate_canonical_initramfs(
         (
             RUNTIME_DESTINATION_ROOT
             + "/system/bin/"
-            "pixel-partitioner-adbd"
+            "treeforge-bootstrap-adbd"
         ),
     )
 

@@ -3,7 +3,7 @@ typedef long i64;
 
 /*
  * ================================================================
- * PP_FREESTANDING_MEMORY_ABI_V1
+ * TFB_FREESTANDING_MEMORY_ABI_V1
  *
  * This PID1 is linked with -nostdlib.
  *
@@ -42,7 +42,7 @@ void *memcpy(
 
 /*
  * ============================================================
- * PP_ONEPASS_RUNTIME_V1
+ * TFB_ONEPASS_RUNTIME_V1
  * Native tangorpro bring-up runtime ABI
  * ============================================================
  */
@@ -87,24 +87,24 @@ void *memcpy(
 #define O_NONBLOCK 04000
 #endif
 
-#define PP_SIGCHLD 17
-#define PP_WAIT_WNOHANG 1
+#define TFB_SIGCHLD 17
+#define TFB_WAIT_WNOHANG 1
 
-#define PP_SIGTERM 15
-#define PP_SIGKILL 9
+#define TFB_SIGTERM 15
+#define TFB_SIGKILL 9
 
-#define PP_MNT_DETACH 2
+#define TFB_MNT_DETACH 2
 
-#define PP_EV_KEY 1
-#define PP_KEY_VOLUMEDOWN 114
-#define PP_KEY_VOLUMEUP 115
-#define PP_KEY_POWER 116
+#define TFB_EV_KEY 1
+#define TFB_KEY_VOLUMEDOWN 114
+#define TFB_KEY_VOLUMEUP 115
+#define TFB_KEY_POWER 116
 
-#define PP_INPUT_COUNT 32
+#define TFB_INPUT_COUNT 32
 
-#define PP_REBOOT_MAGIC1 0xfee1deadUL
-#define PP_REBOOT_MAGIC2 672274793UL
-#define PP_REBOOT_CMD_RESTART2 0xA1B2C3D4UL
+#define TFB_REBOOT_MAGIC1 0xfee1deadUL
+#define TFB_REBOOT_MAGIC2 672274793UL
+#define TFB_REBOOT_CMD_RESTART2 0xA1B2C3D4UL
 
 
 
@@ -127,8 +127,8 @@ void *memcpy(
 #define SYS_MKDIRAT 34
 #endif
 
-#ifndef PP_S_IFCHR
-#define PP_S_IFCHR 0020000
+#ifndef TFB_S_IFCHR
+#define TFB_S_IFCHR 0020000
 #endif
 
 #ifndef SYS_UNLINKAT
@@ -147,7 +147,7 @@ void *memcpy(
 #define SYS_CLONE 220
 #endif
 
-#define PP_SIGCHLD 17
+#define TFB_SIGCHLD 17
 
 
 #define AT_FDCWD -100
@@ -256,7 +256,7 @@ static void write_line(
 
 /*
  * ============================================================
- * PP_V6B_DEV_RUNTIME
+ * TFB_V6B_DEV_RUNTIME
  *
  * This kernel does not provide a usable devtmpfs filesystem.
  *
@@ -269,8 +269,8 @@ static void write_line(
  * ============================================================
  */
 
-static long pp_v6b_dev_mount_rc = -9999;
-static long pp_v6b_devpts_mount_rc = -9999;
+static long tfb_v6b_dev_mount_rc = -9999;
+static long tfb_v6b_devpts_mount_rc = -9999;
 
 
 static void setup_console(
@@ -557,9 +557,9 @@ static void persistent_rc(
 
 /*
  * ================================================================
- * PP_BRINGUP_WATCHDOG_POLICY_V6
+ * TFB_BRINGUP_WATCHDOG_POLICY_V6
  *
- * PP_EARLY_MODULE_RUNTIME_V6
+ * TFB_EARLY_MODULE_RUNTIME_V6
  *
  * The custom initramfs now carries a curated dependency closure
  * sourced from the frozen tangorpro vendor_dlkm.img.
@@ -574,7 +574,7 @@ static void persistent_rc(
 
 /*
  * ================================================================
- * PP_BRINGUP_RUNTIME_V2
+ * TFB_BRINGUP_RUNTIME_V2
  *
  * GS201 module policy:
  *   - dependency aware
@@ -585,16 +585,16 @@ static void persistent_rc(
 
 /*
  * ============================================================
- * Pixel Partitioner-native ADB USB bring-up
+ * TreeForge Bootstrap-native ADB USB bring-up
  * ============================================================
  *
- * This implementation belongs to the Pixel Partitioner lab PID1.
+ * This implementation belongs to the TreeForge Bootstrap lab PID1.
  *
  * It does not depend on Android init, Android properties,
  * Recovery, TreeForge Bootstrap, or a pre-existing gadget.
  */
 
-static int pp_mkdir(
+static int tfb_mkdir(
     const char *path,
     long mode
 ) {
@@ -618,7 +618,7 @@ static int pp_mkdir(
 }
 
 
-static int pp_mount_fs(
+static int tfb_mount_fs(
     const char *source,
     const char *target,
     const char *filesystem
@@ -643,7 +643,7 @@ static int pp_mount_fs(
 }
 
 
-static int pp_write_file(
+static int tfb_write_file(
     const char *path,
     const char *value
 ) {
@@ -659,7 +659,7 @@ static int pp_write_file(
 
     if (fd < 0) {
         persistent_rc(
-            "PP_ADB_WRITE_OPEN rc=",
+            "TFB_ADB_WRITE_OPEN rc=",
             fd
         );
 
@@ -684,7 +684,7 @@ static int pp_write_file(
 
         if (written <= 0) {
             persistent_rc(
-                "PP_ADB_WRITE rc=",
+                "TFB_ADB_WRITE rc=",
                 written
             );
 
@@ -720,10 +720,10 @@ static int pp_write_file(
 }
 
 
-static long pp_adbd_pid = -1;
+static long tfb_adbd_pid = -1;
 
 
-static int pp_path_exists(
+static int tfb_path_exists(
     const char *path
 ) {
     long rc = sys6(
@@ -740,7 +740,7 @@ static int pp_path_exists(
 }
 
 
-static int pp_child_alive(
+static int tfb_child_alive(
     long pid
 ) {
     if (pid <= 0) {
@@ -753,7 +753,7 @@ static int pp_child_alive(
         SYS_WAIT4,
         pid,
         (long)&status,
-        PP_WAIT_WNOHANG,
+        TFB_WAIT_WNOHANG,
         0,
         0,
         0
@@ -766,18 +766,18 @@ static int pp_child_alive(
 }
 
 
-static int pp_adbd_alive(
+static int tfb_adbd_alive(
     void
 ) {
-    if (!pp_child_alive(pp_adbd_pid)) {
-        if (pp_adbd_pid > 0) {
+    if (!tfb_child_alive(tfb_adbd_pid)) {
+        if (tfb_adbd_pid > 0) {
             persistent_rc(
-                "PP_ADB_CHILD_EXIT pid=",
-                pp_adbd_pid
+                "TFB_ADB_CHILD_EXIT pid=",
+                tfb_adbd_pid
             );
         }
 
-        pp_adbd_pid = -1;
+        tfb_adbd_pid = -1;
 
         return 0;
     }
@@ -786,17 +786,17 @@ static int pp_adbd_alive(
 }
 
 
-static void pp_stop_adbd(
+static void tfb_stop_adbd(
     void
 ) {
-    if (pp_adbd_pid <= 0) {
+    if (tfb_adbd_pid <= 0) {
         return;
     }
 
     sys6(
         SYS_KILL,
-        pp_adbd_pid,
-        PP_SIGTERM,
+        tfb_adbd_pid,
+        TFB_SIGTERM,
         0,
         0,
         0,
@@ -809,8 +809,8 @@ static void pp_stop_adbd(
     };
 
     for (int attempt = 0; attempt < 20; ++attempt) {
-        if (!pp_child_alive(pp_adbd_pid)) {
-            pp_adbd_pid = -1;
+        if (!tfb_child_alive(tfb_adbd_pid)) {
+            tfb_adbd_pid = -1;
             return;
         }
 
@@ -827,8 +827,8 @@ static void pp_stop_adbd(
 
     sys6(
         SYS_KILL,
-        pp_adbd_pid,
-        PP_SIGKILL,
+        tfb_adbd_pid,
+        TFB_SIGKILL,
         0,
         0,
         0,
@@ -839,28 +839,28 @@ static void pp_stop_adbd(
 
     sys6(
         SYS_WAIT4,
-        pp_adbd_pid,
+        tfb_adbd_pid,
         (long)&status,
-        PP_WAIT_WNOHANG,
+        TFB_WAIT_WNOHANG,
         0,
         0,
         0
     );
 
-    pp_adbd_pid = -1;
+    tfb_adbd_pid = -1;
 }
 
 
-static long pp_start_adbd(
+static long tfb_start_adbd(
     void
 ) {
     persistent_line(
-        "PP_ADB_DAEMON_START"
+        "TFB_ADB_DAEMON_START"
     );
 
     long child = sys6(
         SYS_CLONE,
-        PP_SIGCHLD,
+        TFB_SIGCHLD,
         0,
         0,
         0,
@@ -870,7 +870,7 @@ static long pp_start_adbd(
 
     if (child < 0) {
         persistent_rc(
-            "PP_ADB_CLONE rc=",
+            "TFB_ADB_CLONE rc=",
             child
         );
 
@@ -879,9 +879,9 @@ static long pp_start_adbd(
 
     if (child == 0) {
         /*
-         * The Pixel Partitioner bridge retains this complete dynamic
+         * The TreeForge Bootstrap bridge retains this complete dynamic
          * runtime through Android FirstStageMain / FreeRamdisk
-         * and materializes it below /dev/pixel-partitioner-runtime.
+         * and materializes it below /dev/treeforge-bootstrap-runtime.
          *
          * Invoke the retained linker directly so this adbd does
          * not depend on the Android system partition's linker or
@@ -889,24 +889,24 @@ static long pp_start_adbd(
          */
         char *argv[] = {
             (char *)
-                "/dev/pixel-partitioner-runtime/system/bin/linker64",
+                "/dev/treeforge-bootstrap-runtime/system/bin/linker64",
             (char *)
-                "/dev/pixel-partitioner-runtime/system/bin/"
-                "pixel-partitioner-adbd",
+                "/dev/treeforge-bootstrap-runtime/system/bin/"
+                "treeforge-bootstrap-adbd",
             0
         };
 
         char *envp[] = {
             (char *)"HOME=/",
             (char *)
-                "PATH=/dev/pixel-partitioner-runtime/system/bin:"
+                "PATH=/dev/treeforge-bootstrap-runtime/system/bin:"
                 "/bin:/sbin",
             (char *)
                 "LD_LIBRARY_PATH="
-                "/dev/pixel-partitioner-runtime/system/lib64",
+                "/dev/treeforge-bootstrap-runtime/system/lib64",
             (char *)
                 "ANDROID_ROOT="
-                "/dev/pixel-partitioner-runtime/system",
+                "/dev/treeforge-bootstrap-runtime/system",
             (char *)"TMPDIR=/tmp",
             0
         };
@@ -914,7 +914,7 @@ static long pp_start_adbd(
         sys6(
             SYS_EXECVE,
             (long)
-                "/dev/pixel-partitioner-runtime/system/bin/linker64",
+                "/dev/treeforge-bootstrap-runtime/system/bin/linker64",
             (long)argv,
             (long)envp,
             0,
@@ -939,10 +939,10 @@ static long pp_start_adbd(
         }
     }
 
-    pp_adbd_pid = child;
+    tfb_adbd_pid = child;
 
     persistent_rc(
-        "PP_ADB_CHILD pid=",
+        "TFB_ADB_CHILD pid=",
         child
     );
 
@@ -950,7 +950,7 @@ static long pp_start_adbd(
 }
 
 
-static int pp_wait_tangorpro_udc(
+static int tfb_wait_tangorpro_udc(
     void
 ) {
     static const char *path =
@@ -968,9 +968,9 @@ static int pp_wait_tangorpro_udc(
      * never permanently disables ADB and never blocks the rescue menu.
      */
     for (int attempt = 0; attempt < 40; ++attempt) {
-        if (pp_path_exists(path)) {
+        if (tfb_path_exists(path)) {
             persistent_line(
-                "PP_UDC_READY name=11210000.dwc3"
+                "TFB_UDC_READY name=11210000.dwc3"
             );
 
             return 1;
@@ -988,31 +988,31 @@ static int pp_wait_tangorpro_udc(
     }
 
     persistent_line(
-        "PP_UDC_NOT_READY name=11210000.dwc3"
+        "TFB_UDC_NOT_READY name=11210000.dwc3"
     );
 
     return 0;
 }
 
 
-static void pp_remove_file(
+static void tfb_remove_file(
     const char *path
 );
 
-static void pp_adb_teardown(
+static void tfb_adb_teardown(
     void
 ) {
 
-    pp_remove_file(
-        "/run/pixel-partitioner-adb-ready"
+    tfb_remove_file(
+        "/dev/treeforge-bootstrap-adb-ready"
     );
 
-    pp_remove_file(
-        "/run/pixel-partitioner-display-modules-ready"
+    tfb_remove_file(
+        "/run/treeforge-bootstrap-display-modules-ready"
     );
 
     persistent_line(
-        "PP_ADB_TEARDOWN_BEGIN"
+        "TFB_ADB_TEARDOWN_BEGIN"
     );
 
     /*
@@ -1023,11 +1023,11 @@ static void pp_adb_teardown(
      * platform.
      */
     if (
-        pp_path_exists(
+        tfb_path_exists(
             "/config/usb_gadget/g1/UDC"
         )
     ) {
-        pp_write_file(
+        tfb_write_file(
             "/config/usb_gadget/g1/UDC",
             "\n"
         );
@@ -1044,25 +1044,100 @@ static void pp_adb_teardown(
         0
     );
 
-    pp_stop_adbd();
+    tfb_stop_adbd();
 
     sys6(
         SYS_UMOUNT2,
         (long)"/dev/usb-ffs/adb",
-        PP_MNT_DETACH,
+        TFB_MNT_DETACH,
         0,
         0,
         0,
         0
     );
 
+    /*
+     * TREEFORGE_ANDROID_ADB_FUNCTION_CLEANUP_V2
+     *
+     * TreeForge owns the ffs.adb function instance used by
+     * the boot menu.  After disconnecting the gadget, removing
+     * the configuration link, stopping TreeForge adbd, and
+     * detaching TreeForge's FunctionFS mount, remove that
+     * configfs function instance as well.
+     *
+     * Android GS201 early-boot recreates ffs.adb and mounts its
+     * own FunctionFS instance.
+     */
+    long function_remove_rc = sys6(
+        SYS_UNLINKAT,
+        AT_FDCWD,
+        (long)
+            "/config/usb_gadget/g1/"
+            "functions/ffs.adb",
+        0x200, /* AT_REMOVEDIR */
+        0,
+        0,
+        0
+    );
+
+    persistent_rc(
+        "TFB_ADB_FUNCTION_INSTANCE_REMOVE rc=",
+        function_remove_rc
+    );
+
+
+    /*
+     * TREEFORGE_ANDROID_FULL_GADGET_CLEANUP_V3
+     *
+     * The TreeForge menu owns the complete g1 instance it creates.
+     * Once its FunctionFS function has been detached, remove the
+     * remaining TreeForge-created configfs hierarchy in reverse order.
+     *
+     * Android GS201 early-boot recreates g1 and its complete function
+     * population itself.  Do not carry TreeForge's partial gadget tree
+     * across the second-stage Android ownership boundary.
+     */
+    static const char *cleanup_directories[] = {
+        "/config/usb_gadget/g1/configs/b.1/strings/0x409",
+        "/config/usb_gadget/g1/configs/b.1/strings",
+        "/config/usb_gadget/g1/configs/b.1",
+        "/config/usb_gadget/g1/configs",
+        "/config/usb_gadget/g1/strings/0x409",
+        "/config/usb_gadget/g1/strings",
+        "/config/usb_gadget/g1/functions",
+        "/config/usb_gadget/g1",
+        0
+    };
+
+    for (
+        int cleanup_index = 0;
+        cleanup_directories[cleanup_index];
+        ++cleanup_index
+    ) {
+        long cleanup_rc = sys6(
+            SYS_UNLINKAT,
+            AT_FDCWD,
+            (long)
+                cleanup_directories[cleanup_index],
+            0x200, /* AT_REMOVEDIR */
+            0,
+            0,
+            0
+        );
+
+        persistent_rc(
+            "TFB_ADB_GADGET_RMDIR rc=",
+            cleanup_rc
+        );
+    }
+
     persistent_line(
-        "PP_ADB_TEARDOWN_END"
+        "TFB_ADB_TEARDOWN_END"
     );
 }
 
 
-static int pp_wait_functionfs_runtime(
+static int tfb_wait_functionfs_runtime(
     void
 ) {
     struct timespec pause = {
@@ -1071,24 +1146,24 @@ static int pp_wait_functionfs_runtime(
     };
 
     for (int attempt = 0; attempt < 100; ++attempt) {
-        if (!pp_adbd_alive()) {
+        if (!tfb_adbd_alive()) {
             persistent_line(
-                "PP_ADB_DAEMON_DIED_BEFORE_FUNCTIONFS"
+                "TFB_ADB_DAEMON_DIED_BEFORE_FUNCTIONFS"
             );
 
             return 0;
         }
 
         if (
-            pp_path_exists(
+            tfb_path_exists(
                 "/dev/usb-ffs/adb/ep1"
             )
-            && pp_path_exists(
+            && tfb_path_exists(
                 "/dev/usb-ffs/adb/ep2"
             )
         ) {
             persistent_line(
-                "PP_ADB_FUNCTIONFS_ENDPOINTS_READY"
+                "TFB_ADB_FUNCTIONFS_ENDPOINTS_READY"
             );
 
             return 1;
@@ -1106,7 +1181,7 @@ static int pp_wait_functionfs_runtime(
     }
 
     persistent_line(
-        "PP_ADB_FUNCTIONFS_TIMEOUT"
+        "TFB_ADB_FUNCTIONFS_TIMEOUT"
     );
 
     return 0;
@@ -1134,17 +1209,17 @@ static int pp_wait_functionfs_runtime(
 #define O_TRUNC 01000
 #endif
 
-#define PP_PROT_READ  1
-#define PP_PROT_WRITE 2
-#define PP_MAP_SHARED 1
+#define TFB_PROT_READ  1
+#define TFB_PROT_WRITE 2
+#define TFB_MAP_SHARED 1
 
-#define PP_MODULE_WORKER_USB_INPUT  1
+#define TFB_MODULE_WORKER_USB_INPUT  1
 
-#define PP_MODULE_WORKER_DISPLAY    2
-#define PP_MODULE_WORKER_FULL       3
+#define TFB_MODULE_WORKER_DISPLAY    2
+#define TFB_MODULE_WORKER_FULL       3
 
 
-static int pp_touch_file(
+static int tfb_touch_file(
     const char *path
 ) {
     long fd = sys6(
@@ -1187,7 +1262,7 @@ static int pp_touch_file(
 }
 
 
-static void pp_remove_file(
+static void tfb_remove_file(
     const char *path
 ) {
     sys6(
@@ -1203,7 +1278,7 @@ static void pp_remove_file(
 
 
 /*
- * PP_V6C_PID1_WATCHDOG_BIND_CHECK
+ * TFB_V6C_PID1_WATCHDOG_BIND_CHECK
  *
  * Module insertion alone does not prove that the GS201 watchdog
  * platform device matched and registered.
@@ -1217,197 +1292,197 @@ static void pp_remove_file(
  * ------------------------------------------------------------------
  */
 
-typedef unsigned int pp_u32;
-typedef unsigned short pp_u16;
-typedef unsigned long long pp_u64;
+typedef unsigned int tfb_u32;
+typedef unsigned short tfb_u16;
+typedef unsigned long long tfb_u64;
 
 
-struct pp_drm_modeinfo {
-    pp_u32 clock;
+struct tfb_drm_modeinfo {
+    tfb_u32 clock;
 
-    pp_u16 hdisplay;
-    pp_u16 hsync_start;
-    pp_u16 hsync_end;
-    pp_u16 htotal;
-    pp_u16 hskew;
+    tfb_u16 hdisplay;
+    tfb_u16 hsync_start;
+    tfb_u16 hsync_end;
+    tfb_u16 htotal;
+    tfb_u16 hskew;
 
-    pp_u16 vdisplay;
-    pp_u16 vsync_start;
-    pp_u16 vsync_end;
-    pp_u16 vtotal;
-    pp_u16 vscan;
+    tfb_u16 vdisplay;
+    tfb_u16 vsync_start;
+    tfb_u16 vsync_end;
+    tfb_u16 vtotal;
+    tfb_u16 vscan;
 
-    pp_u32 vrefresh;
-    pp_u32 flags;
-    pp_u32 type;
+    tfb_u32 vrefresh;
+    tfb_u32 flags;
+    tfb_u32 type;
 
     char name[32];
 };
 
 
-struct pp_drm_card_res {
-    pp_u64 fb_id_ptr;
-    pp_u64 crtc_id_ptr;
-    pp_u64 connector_id_ptr;
-    pp_u64 encoder_id_ptr;
+struct tfb_drm_card_res {
+    tfb_u64 fb_id_ptr;
+    tfb_u64 crtc_id_ptr;
+    tfb_u64 connector_id_ptr;
+    tfb_u64 encoder_id_ptr;
 
-    pp_u32 count_fbs;
-    pp_u32 count_crtcs;
-    pp_u32 count_connectors;
-    pp_u32 count_encoders;
+    tfb_u32 count_fbs;
+    tfb_u32 count_crtcs;
+    tfb_u32 count_connectors;
+    tfb_u32 count_encoders;
 
-    pp_u32 min_width;
-    pp_u32 max_width;
-    pp_u32 min_height;
-    pp_u32 max_height;
+    tfb_u32 min_width;
+    tfb_u32 max_width;
+    tfb_u32 min_height;
+    tfb_u32 max_height;
 };
 
 
-struct pp_drm_connector {
-    pp_u64 encoders_ptr;
-    pp_u64 modes_ptr;
-    pp_u64 props_ptr;
-    pp_u64 prop_values_ptr;
+struct tfb_drm_connector {
+    tfb_u64 encoders_ptr;
+    tfb_u64 modes_ptr;
+    tfb_u64 props_ptr;
+    tfb_u64 prop_values_ptr;
 
-    pp_u32 count_modes;
-    pp_u32 count_props;
-    pp_u32 count_encoders;
+    tfb_u32 count_modes;
+    tfb_u32 count_props;
+    tfb_u32 count_encoders;
 
-    pp_u32 encoder_id;
-    pp_u32 connector_id;
-    pp_u32 connector_type;
-    pp_u32 connector_type_id;
-    pp_u32 connection;
+    tfb_u32 encoder_id;
+    tfb_u32 connector_id;
+    tfb_u32 connector_type;
+    tfb_u32 connector_type_id;
+    tfb_u32 connection;
 
-    pp_u32 mm_width;
-    pp_u32 mm_height;
-    pp_u32 subpixel;
-    pp_u32 pad;
+    tfb_u32 mm_width;
+    tfb_u32 mm_height;
+    tfb_u32 subpixel;
+    tfb_u32 pad;
 };
 
 
-struct pp_drm_encoder {
-    pp_u32 encoder_id;
-    pp_u32 encoder_type;
-    pp_u32 crtc_id;
-    pp_u32 possible_crtcs;
-    pp_u32 possible_clones;
+struct tfb_drm_encoder {
+    tfb_u32 encoder_id;
+    tfb_u32 encoder_type;
+    tfb_u32 crtc_id;
+    tfb_u32 possible_crtcs;
+    tfb_u32 possible_clones;
 };
 
 
-struct pp_drm_crtc {
-    pp_u64 set_connectors_ptr;
+struct tfb_drm_crtc {
+    tfb_u64 set_connectors_ptr;
 
-    pp_u32 count_connectors;
-    pp_u32 crtc_id;
-    pp_u32 fb_id;
-    pp_u32 x;
-    pp_u32 y;
-    pp_u32 gamma_size;
-    pp_u32 mode_valid;
+    tfb_u32 count_connectors;
+    tfb_u32 crtc_id;
+    tfb_u32 fb_id;
+    tfb_u32 x;
+    tfb_u32 y;
+    tfb_u32 gamma_size;
+    tfb_u32 mode_valid;
 
-    struct pp_drm_modeinfo mode;
+    struct tfb_drm_modeinfo mode;
 };
 
 
-struct pp_drm_create_dumb {
-    pp_u32 height;
-    pp_u32 width;
-    pp_u32 bpp;
-    pp_u32 flags;
-    pp_u32 handle;
-    pp_u32 pitch;
-    pp_u64 size;
+struct tfb_drm_create_dumb {
+    tfb_u32 height;
+    tfb_u32 width;
+    tfb_u32 bpp;
+    tfb_u32 flags;
+    tfb_u32 handle;
+    tfb_u32 pitch;
+    tfb_u64 size;
 };
 
 
-struct pp_drm_map_dumb {
-    pp_u32 handle;
-    pp_u32 pad;
-    pp_u64 offset;
+struct tfb_drm_map_dumb {
+    tfb_u32 handle;
+    tfb_u32 pad;
+    tfb_u64 offset;
 };
 
 
-struct pp_drm_fb2 {
-    pp_u32 fb_id;
-    pp_u32 width;
-    pp_u32 height;
-    pp_u32 pixel_format;
-    pp_u32 flags;
+struct tfb_drm_fb2 {
+    tfb_u32 fb_id;
+    tfb_u32 width;
+    tfb_u32 height;
+    tfb_u32 pixel_format;
+    tfb_u32 flags;
 
-    pp_u32 handles[4];
-    pp_u32 pitches[4];
-    pp_u32 offsets[4];
+    tfb_u32 handles[4];
+    tfb_u32 pitches[4];
+    tfb_u32 offsets[4];
 
-    pp_u64 modifier[4];
+    tfb_u64 modifier[4];
 };
 
 
-#define PP_IOC_NRBITS    8
-#define PP_IOC_TYPEBITS  8
-#define PP_IOC_SIZEBITS 14
+#define TFB_IOC_NRBITS    8
+#define TFB_IOC_TYPEBITS  8
+#define TFB_IOC_SIZEBITS 14
 
-#define PP_IOC_NRSHIFT    0
-#define PP_IOC_TYPESHIFT  8
-#define PP_IOC_SIZESHIFT 16
-#define PP_IOC_DIRSHIFT  30
+#define TFB_IOC_NRSHIFT    0
+#define TFB_IOC_TYPESHIFT  8
+#define TFB_IOC_SIZESHIFT 16
+#define TFB_IOC_DIRSHIFT  30
 
-#define PP_IOC_WRITE 1U
-#define PP_IOC_READ  2U
+#define TFB_IOC_WRITE 1U
+#define TFB_IOC_READ  2U
 
-#define PP_IOC(dir,type,nr,size) \
+#define TFB_IOC(dir,type,nr,size) \
     ( \
-        ((unsigned long)(dir)  << PP_IOC_DIRSHIFT) \
-        | ((unsigned long)(type) << PP_IOC_TYPESHIFT) \
-        | ((unsigned long)(nr)   << PP_IOC_NRSHIFT) \
-        | ((unsigned long)(size) << PP_IOC_SIZESHIFT) \
+        ((unsigned long)(dir)  << TFB_IOC_DIRSHIFT) \
+        | ((unsigned long)(type) << TFB_IOC_TYPESHIFT) \
+        | ((unsigned long)(nr)   << TFB_IOC_NRSHIFT) \
+        | ((unsigned long)(size) << TFB_IOC_SIZESHIFT) \
     )
 
-#define PP_DRM_IOWR(nr,type) \
-    PP_IOC( \
-        PP_IOC_READ | PP_IOC_WRITE, \
+#define TFB_DRM_IOWR(nr,type) \
+    TFB_IOC( \
+        TFB_IOC_READ | TFB_IOC_WRITE, \
         'd', \
         nr, \
         sizeof(type) \
     )
 
-#define PP_DRM_GETRESOURCES \
-    PP_DRM_IOWR(0xA0, struct pp_drm_card_res)
+#define TFB_DRM_GETRESOURCES \
+    TFB_DRM_IOWR(0xA0, struct tfb_drm_card_res)
 
-#define PP_DRM_SETCRTC \
-    PP_DRM_IOWR(0xA2, struct pp_drm_crtc)
+#define TFB_DRM_SETCRTC \
+    TFB_DRM_IOWR(0xA2, struct tfb_drm_crtc)
 
-#define PP_DRM_GETENCODER \
-    PP_DRM_IOWR(0xA6, struct pp_drm_encoder)
+#define TFB_DRM_GETENCODER \
+    TFB_DRM_IOWR(0xA6, struct tfb_drm_encoder)
 
-#define PP_DRM_GETCONNECTOR \
-    PP_DRM_IOWR(0xA7, struct pp_drm_connector)
+#define TFB_DRM_GETCONNECTOR \
+    TFB_DRM_IOWR(0xA7, struct tfb_drm_connector)
 
-#define PP_DRM_CREATE_DUMB \
-    PP_DRM_IOWR(0xB2, struct pp_drm_create_dumb)
+#define TFB_DRM_CREATE_DUMB \
+    TFB_DRM_IOWR(0xB2, struct tfb_drm_create_dumb)
 
-#define PP_DRM_MAP_DUMB \
-    PP_DRM_IOWR(0xB3, struct pp_drm_map_dumb)
+#define TFB_DRM_MAP_DUMB \
+    TFB_DRM_IOWR(0xB3, struct tfb_drm_map_dumb)
 
-#define PP_DRM_ADDFB2 \
-    PP_DRM_IOWR(0xB8, struct pp_drm_fb2)
+#define TFB_DRM_ADDFB2 \
+    TFB_DRM_IOWR(0xB8, struct tfb_drm_fb2)
 
-#define PP_DRM_CONNECTED 1
-#define PP_DRM_MODE_PREFERRED (1U << 3)
+#define TFB_DRM_CONNECTED 1
+#define TFB_DRM_MODE_PREFERRED (1U << 3)
 
-#define PP_DRM_FORMAT_XRGB8888 0x34325258U
+#define TFB_DRM_FORMAT_XRGB8888 0x34325258U
 
 
-static int pp_drm_menu_active = 0;
+static int tfb_drm_menu_active = 0;
 
 
 /*
- * PP_USB_ONLY_BRINGUP_V5
+ * TFB_USB_ONLY_BRINGUP_V5
  *
  * GS201 device-session activation normally belongs to Android's
  * USB policy. This initramfs owns it directly.
  */
-static int pp_enable_gs201_usb_device_session(
+static int tfb_enable_gs201_usb_device_session(
     void
 ) {
     const char *path = (
@@ -1415,103 +1490,103 @@ static int pp_enable_gs201_usb_device_session(
         "dwc3_exynos_otg_b_sess"
     );
 
-    if (!pp_path_exists(path)) {
+    if (!tfb_path_exists(path)) {
         persistent_line(
-            "PP_GS201_USB_B_SESS_NOT_READY"
+            "TFB_GS201_USB_B_SESS_NOT_READY"
         );
 
         return 0;
     }
 
     if (
-        !pp_write_file(
+        !tfb_write_file(
             path,
             "1"
         )
     ) {
         persistent_line(
-            "PP_GS201_USB_B_SESS_WRITE_FAILED"
+            "TFB_GS201_USB_B_SESS_WRITE_FAILED"
         );
 
         return 0;
     }
 
     persistent_line(
-        "PP_GS201_USB_B_SESS_ENABLED"
+        "TFB_GS201_USB_B_SESS_ENABLED"
     );
 
     return 1;
 }
 
 
-static int pp_setup_adb_usb(
+static int tfb_setup_adb_usb(
     void
 ) {
     persistent_line(
-        "PP_ADB_BEGIN"
+        "TFB_ADB_BEGIN"
     );
 
     /*
-     * PP_POST_FIRST_STAGE_ADB_SERVICE_V1
+     * TFB_POST_FIRST_STAGE_ADB_SERVICE_V1
      *
      * Platform/module readiness is now established by canonical
-     * Google FirstStageMain before the Pixel Partitioner bridge launches
+     * Google FirstStageMain before the TreeForge Bootstrap bridge launches
      * this service.  Gadget realization therefore has no dependency
      * on the obsolete V7 module-worker marker.
      */
     persistent_line(
-        "PP_ADB_POST_FIRST_STAGE_PLATFORM_READY"
+        "TFB_ADB_POST_FIRST_STAGE_PLATFORM_READY"
     );
 
     /*
      * Make repeated attempts deterministic before rebuilding
      * the gadget.
      */
-    pp_adb_teardown();
+    tfb_adb_teardown();
 
     /*
      * GS201 device-session activation is mandatory.  V6B ignored
      * this return value; V6C requires success.
      */
     if (
-        !pp_enable_gs201_usb_device_session()
+        !tfb_enable_gs201_usb_device_session()
     ) {
         persistent_line(
-            "PP_V6C_ADB_B_SESS_FAILED"
+            "TFB_V6C_ADB_B_SESS_FAILED"
         );
 
         return 0;
     }
 
     persistent_line(
-        "PP_V6C_ADB_B_SESS_READY"
+        "TFB_V6C_ADB_B_SESS_READY"
     );
 
-    if (!pp_wait_tangorpro_udc()) {
+    if (!tfb_wait_tangorpro_udc()) {
         persistent_line(
-            "PP_V6C_ADB_UDC_WAIT_FAILED"
+            "TFB_V6C_ADB_UDC_WAIT_FAILED"
         );
 
         return 0;
     }
 
     persistent_line(
-        "PP_V6C_ADB_UDC_READY"
+        "TFB_V6C_ADB_UDC_READY"
     );
 
     if (
-        !pp_mkdir(
+        !tfb_mkdir(
             "/config",
             0755
         )
-        || !pp_mount_fs(
+        || !tfb_mount_fs(
             "none",
             "/config",
             "configfs"
         )
     ) {
         persistent_line(
-            "PP_ADB_CONFIGFS_FAILED"
+            "TFB_ADB_CONFIGFS_FAILED"
         );
 
         return 0;
@@ -1533,100 +1608,100 @@ static int pp_setup_adb_usb(
 
     for (int index = 0; directories[index]; ++index) {
         if (
-            !pp_mkdir(
+            !tfb_mkdir(
                 directories[index],
                 0755
             )
         ) {
             persistent_line(
-                "PP_ADB_CONFIGFS_MKDIR_FAILED"
+                "TFB_ADB_CONFIGFS_MKDIR_FAILED"
             );
 
-            pp_adb_teardown();
+            tfb_adb_teardown();
 
             return 0;
         }
     }
 
     if (
-        !pp_write_file(
+        !tfb_write_file(
             "/config/usb_gadget/g1/idVendor",
             "0x18d1"
         )
-        || !pp_write_file(
+        || !tfb_write_file(
             "/config/usb_gadget/g1/idProduct",
             "0x4ee7"
         )
-        || !pp_write_file(
+        || !tfb_write_file(
             "/config/usb_gadget/g1/"
             "strings/0x409/manufacturer",
             "TreeForge"
         )
-        || !pp_write_file(
+        || !tfb_write_file(
             "/config/usb_gadget/g1/"
             "strings/0x409/product",
-            "Pixel Partitioner"
+            "TreeForge Bootstrap"
         )
-        || !pp_write_file(
+        || !tfb_write_file(
             "/config/usb_gadget/g1/"
             "strings/0x409/serialnumber",
             "treeforge-tangorpro"
         )
-        || !pp_write_file(
+        || !tfb_write_file(
             "/config/usb_gadget/g1/"
             "configs/b.1/strings/0x409/configuration",
             "ADB"
         )
     ) {
         persistent_line(
-            "PP_ADB_IDENTITY_FAILED"
+            "TFB_ADB_IDENTITY_FAILED"
         );
 
-        pp_adb_teardown();
+        tfb_adb_teardown();
 
         return 0;
     }
 
     if (
-        !pp_mkdir(
+        !tfb_mkdir(
             "/dev/usb-ffs",
             0755
         )
-        || !pp_mkdir(
+        || !tfb_mkdir(
             "/dev/usb-ffs/adb",
             0755
         )
-        || !pp_mount_fs(
+        || !tfb_mount_fs(
             "adb",
             "/dev/usb-ffs/adb",
             "functionfs"
         )
     ) {
         persistent_line(
-            "PP_ADB_FUNCTIONFS_MOUNT_FAILED"
+            "TFB_ADB_FUNCTIONFS_MOUNT_FAILED"
         );
 
-        pp_adb_teardown();
+        tfb_adb_teardown();
 
         return 0;
     }
 
     persistent_line(
-        "PP_ADB_FUNCTIONFS_MOUNTED"
+        "TFB_ADB_FUNCTIONFS_MOUNTED"
     );
 
-    if (pp_start_adbd() <= 0) {
+    if (tfb_start_adbd() <= 0) {
         persistent_line(
-            "PP_ADB_DAEMON_FAILED"
+            "TFB_ADB_DAEMON_FAILED"
         );
 
-        pp_adb_teardown();
+        tfb_adb_teardown();
 
         return 0;
     }
 
-    if (!pp_wait_functionfs_runtime()) {
-        pp_adb_teardown();
+    if (!tfb_wait_functionfs_runtime()) {
+        tfb_adb_teardown();
 
         return 0;
     }
@@ -1663,40 +1738,40 @@ static int pp_setup_adb_usb(
 
     if (link_rc < 0) {
         persistent_rc(
-            "PP_ADB_FUNCTION_LINK rc=",
+            "TFB_ADB_FUNCTION_LINK rc=",
             link_rc
         );
 
-        pp_adb_teardown();
+        tfb_adb_teardown();
 
         return 0;
     }
 
     persistent_line(
-        "PP_ADB_FUNCTION_LINKED"
+        "TFB_ADB_FUNCTION_LINKED"
     );
 
-    if (!pp_adbd_alive()) {
+    if (!tfb_adbd_alive()) {
         persistent_line(
-            "PP_ADB_DAEMON_DIED_BEFORE_BIND"
+            "TFB_ADB_DAEMON_DIED_BEFORE_BIND"
         );
 
-        pp_adb_teardown();
+        tfb_adb_teardown();
 
         return 0;
     }
 
     if (
-        !pp_write_file(
+        !tfb_write_file(
             "/config/usb_gadget/g1/UDC",
             "11210000.dwc3"
         )
     ) {
         persistent_line(
-            "PP_ADB_UDC_BIND_FAILED"
+            "TFB_ADB_UDC_BIND_FAILED"
         );
 
-        pp_adb_teardown();
+        tfb_adb_teardown();
 
         return 0;
     }
@@ -1716,22 +1791,22 @@ static int pp_setup_adb_usb(
         0
     );
 
-    if (!pp_adbd_alive()) {
+    if (!tfb_adbd_alive()) {
         persistent_line(
-            "PP_ADB_DAEMON_DIED_AFTER_BIND"
+            "TFB_ADB_DAEMON_DIED_AFTER_BIND"
         );
 
-        pp_adb_teardown();
+        tfb_adb_teardown();
 
         return 0;
     }
 
-    pp_touch_file(
-        "/run/pixel-partitioner-adb-ready"
+    tfb_touch_file(
+        "/dev/treeforge-bootstrap-adb-ready"
     );
 
     persistent_line(
-        "PP_ADB_READY"
+        "TFB_ADB_READY"
     );
 
     write_line(
@@ -1745,7 +1820,7 @@ static int pp_setup_adb_usb(
 
 
 
-struct pp_input_event {
+struct tfb_input_event {
     long tv_sec;
     long tv_usec;
     unsigned short type;
@@ -1754,10 +1829,163 @@ struct pp_input_event {
 };
 
 
-static long pp_rescue_pid = -1;
+static long tfb_rescue_pid = -1;
 
 
-static void pp_supervise_adb_service(
+/*
+ * TFB_ADB_USB_RECONNECT_V17_1B
+ *
+ * adbd may remain alive after the physical USB cable is removed.
+ * Supervising only the child PID therefore cannot detect a dead USB
+ * transport.
+ *
+ * The GS201 UDC publishes the physical session state at:
+ *
+ *     /sys/class/udc/11210000.dwc3/state
+ *
+ * We react only to the explicit "not attached" state.  Transitional
+ * states such as powered/default/address/configured/suspended remain
+ * valid and must not cause gadget churn.
+ */
+static int tfb_text_equal(
+    const char *left,
+    const char *right
+) {
+    if (!left || !right) {
+        return 0;
+    }
+
+    while (
+        *left != '\0'
+        && *right != '\0'
+    ) {
+        if (*left != *right) {
+            return 0;
+        }
+
+        left++;
+        right++;
+    }
+
+    return (
+        *left == '\0'
+        && *right == '\0'
+    );
+}
+
+
+static int tfb_read_small_text(
+    const char *path,
+    char *buffer,
+    usize capacity
+) {
+    if (
+        !path
+        || !buffer
+        || capacity < 2
+    ) {
+        return 0;
+    }
+
+    long fd = sys6(
+        SYS_OPENAT,
+        AT_FDCWD,
+        (long) path,
+        O_RDONLY
+        | O_NONBLOCK,
+        0,
+        0,
+        0
+    );
+
+    if (fd < 0) {
+        return 0;
+    }
+
+    long amount = sys6(
+        SYS_READ,
+        fd,
+        (long) buffer,
+        (long) (
+            capacity - 1
+        ),
+        0,
+        0,
+        0
+    );
+
+    sys6(
+        SYS_CLOSE,
+        fd,
+        0,
+        0,
+        0,
+        0,
+        0
+    );
+
+    if (amount <= 0) {
+        return 0;
+    }
+
+    usize length =
+        (usize) amount;
+
+    if (length >= capacity) {
+        length =
+            capacity - 1;
+    }
+
+    buffer[length] =
+        '\0';
+
+    while (
+        length > 0
+        && (
+            buffer[length - 1]
+                == '\n'
+            || buffer[length - 1]
+                == '\r'
+            || buffer[length - 1]
+                == ' '
+            || buffer[length - 1]
+                == '\t'
+        )
+    ) {
+        length--;
+
+        buffer[length] =
+            '\0';
+    }
+
+    return length > 0;
+}
+
+
+static int tfb_udc_explicitly_detached(
+    void
+) {
+    char state[32];
+
+    if (
+        !tfb_read_small_text(
+            "/sys/class/udc/"
+            "11210000.dwc3/state",
+            state,
+            sizeof(state)
+        )
+    ) {
+        return 0;
+    }
+
+    return tfb_text_equal(
+        state,
+        "not attached"
+    );
+}
+
+
+static void tfb_supervise_adb_service(
     int adb_ready
 ) {
     struct timespec pause = {
@@ -1767,23 +1995,87 @@ static void pp_supervise_adb_service(
 
     int retry_ticks = 0;
 
+    /*
+     * 8 x 25 ms prevents a short UDC transition from being mistaken
+     * for a physical cable removal.
+     */
+    int detached_ticks = 0;
+
     persistent_line(
-        "PP_ADB_SERVICE_SUPERVISOR_BEGIN"
+        "TFB_ADB_SERVICE_SUPERVISOR_BEGIN"
     );
 
     for (;;) {
         if (
-            adb_ready
-            && !pp_adbd_alive()
+            tfb_path_exists(
+                "/dev/treeforge-bootstrap-adb-stop"
+            )
         ) {
             persistent_line(
-                "PP_ADB_SERVICE_RUNTIME_LOST"
+                "TFB_ADB_SERVICE_STOP_REQUEST"
             );
 
-            pp_adb_teardown();
+            tfb_adb_teardown();
+
+            persistent_line(
+                "TFB_ADB_SERVICE_STOPPED"
+            );
+
+            sys6(
+                SYS_EXIT,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+            );
+
+            for (;;) {
+            }
+        }
+
+        if (
+            adb_ready
+            && !tfb_adbd_alive()
+        ) {
+            persistent_line(
+                "TFB_ADB_SERVICE_RUNTIME_LOST"
+            );
+
+            tfb_adb_teardown();
 
             adb_ready = 0;
             retry_ticks = 0;
+            detached_ticks = 0;
+        }
+
+        if (
+            adb_ready
+            && tfb_udc_explicitly_detached()
+        ) {
+            detached_ticks++;
+
+            if (
+                detached_ticks >= 8
+            ) {
+                persistent_line(
+                    "TFB_ADB_USB_SESSION_LOST"
+                );
+
+                /*
+                 * Reuse the complete deterministic gadget teardown.
+                 * The existing retry path will recreate FunctionFS,
+                 * restart adbd, relink ffs.adb and rebind the UDC.
+                 */
+                tfb_adb_teardown();
+
+                adb_ready = 0;
+                retry_ticks = 0;
+                detached_ticks = 0;
+            }
+        } else {
+            detached_ticks = 0;
         }
 
         if (!adb_ready) {
@@ -1800,15 +2092,15 @@ static void pp_supervise_adb_service(
                 retry_ticks = 1;
 
                 persistent_line(
-                    "PP_ADB_SERVICE_RETRY"
+                    "TFB_ADB_SERVICE_RETRY"
                 );
 
                 adb_ready = (
-                    pp_setup_adb_usb()
+                    tfb_setup_adb_usb()
                 );
 
                 persistent_rc(
-                    "PP_ADB_SERVICE_SETUP_RESULT value=",
+                    "TFB_ADB_SERVICE_SETUP_RESULT value=",
                     adb_ready
                 );
             }
@@ -1864,12 +2156,12 @@ void _start(
      * and /dev creation.  Do not recreate the V7 module worker,
      * rescue UI, or standalone early-device runtime here.
      */
-    pp_mkdir(
+    tfb_mkdir(
         "/run",
         0755
     );
 
-    pp_mkdir(
+    tfb_mkdir(
         "/tmp",
         01777
     );
@@ -1901,19 +2193,19 @@ void _start(
     setup_console();
 
     persistent_line(
-        "PIXEL_PARTITIONER_ADB_SERVICE_BEGIN"
+        "TREEFORGE_BOOTSTRAP_ADB_SERVICE_BEGIN"
     );
 
     int adb_ready = (
-        pp_setup_adb_usb()
+        tfb_setup_adb_usb()
     );
 
     persistent_rc(
-        "PP_ADB_SERVICE_INITIAL_RESULT value=",
+        "TFB_ADB_SERVICE_INITIAL_RESULT value=",
         adb_ready
     );
 
-    pp_supervise_adb_service(
+    tfb_supervise_adb_service(
         adb_ready
     );
 

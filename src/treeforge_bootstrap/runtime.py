@@ -29,19 +29,19 @@ class TreeForgeBootstrapRuntimeError(
 ADBD_PROVIDER_ROOT = (
     PROVIDERS
     / "external"
-    / "pixel-partitioner-adbd"
+    / "treeforge-bootstrap-adbd"
     / "android-15.0.0_r36-arm64"
     / "rootfs"
 )
 
 EXPECTED_ADBD_SHA256 = (
-    "938587531b1a4f6ee74d591ffd5be8445"
-    "9d43402e0ed54cadfa17283b680bef8"
+    "46ab32860fc78a7556c47b71e8f4a208"
+    "9f43492fd78bc30727f94a3b466e4109"
 )
 
 EXPECTED_ADB_SERVICE_SHA256 = (
-    "03ab7f2dbbb252d409076d65890381045"
-    "78f6f3ea28aa61a838b557c84edd988"
+    "92742cd84b78291f554246dbec7932850"
+    "6f6acbf6027304bf91e2a1a566be61a"
 )
 
 RUNTIME_OUT = (
@@ -88,28 +88,9 @@ def _sha256(
 
 
 def _clang() -> Path:
-    override = os.environ.get(
-        "TREEFORGE_BOOTSTRAP_CLANG"
-    )
+    from .host_providers import ensure_clang
 
-    if not override:
-        raise TreeForgeBootstrapRuntimeError(
-            "TREEFORGE_BOOTSTRAP_CLANG "
-            "must select the pinned clang provider"
-        )
-
-    path = Path(
-        override
-    ).expanduser().resolve()
-
-    if not path.is_file():
-        raise TreeForgeBootstrapRuntimeError(
-            "TREEFORGE_BOOTSTRAP_CLANG "
-            f"is missing: {path}"
-        )
-
-    return path
-
+    return ensure_clang()
 
 def _lz4() -> Path:
     discovered = shutil.which(
@@ -162,7 +143,7 @@ def _compile_adb_service(
 
     output = (
         stage
-        / "pixel-partitioner-adb-service"
+        / "treeforge-bootstrap-adb-service"
     )
 
     if not source.is_file():
@@ -237,7 +218,7 @@ def _copy_external_provider(
 ) -> None:
     if not ADBD_PROVIDER_ROOT.is_dir():
         raise TreeForgeBootstrapRuntimeError(
-            "pixel-partitioner-adbd provider "
+            "treeforge-bootstrap-adbd provider "
             "rootfs missing: "
             f"{ADBD_PROVIDER_ROOT}"
         )
@@ -246,7 +227,7 @@ def _copy_external_provider(
         ADBD_PROVIDER_ROOT
         / "system"
         / "bin"
-        / "pixel-partitioner-adbd"
+        / "treeforge-bootstrap-adbd"
     )
 
     if (
@@ -255,7 +236,7 @@ def _copy_external_provider(
         != EXPECTED_ADBD_SHA256
     ):
         raise TreeForgeBootstrapRuntimeError(
-            "pixel-partitioner-adbd provider "
+            "treeforge-bootstrap-adbd provider "
             "identity changed"
         )
 
@@ -495,10 +476,9 @@ def _validate_menu(
         )
 
     required = (
-        b"TREEFORGE MENU",
-        b"REBOOT BOOTLOADER",
-        b"/dev/pixel_partitioner_fb",
-        b"pixel-partitioner-adb-service",
+        b"TREEFORGE_MENU_PROFILE_V1",
+        b"/dev/treeforge_bootstrap_fb",
+        b"treeforge-bootstrap-adb-service",
     )
 
     for marker in required:
@@ -578,11 +558,11 @@ def build_runtime() -> Path:
         "platform":
             "android-15",
         "menu_identity":
-            "TreeForge Menu",
+            "TreeForge Boot Manager",
         "signed_image":
             False,
         "signing_owner":
-            "pixel_partitioner",
+            "downstream_consumer",
         "runtime": {
             "initramfs_cpio_bytes":
                 RAW_INITRAMFS.stat().st_size,
@@ -647,9 +627,9 @@ def build_runtime() -> Path:
     )
     print(f"Metadata:   {RUNTIME_METADATA}")
     print()
-    print("VISIBLE_MENU_IDENTITY=TreeForge Menu")
+    print("VISIBLE_MENU_IDENTITY=TreeForge Boot Manager")
     print("SIGNED_IMAGE=NO")
-    print("SIGNING_OWNER=Pixel Partitioner")
+    print("SIGNING_OWNER=DOWNSTREAM_CONSUMER")
     print("TREEFORGE_BOOTSTRAP_RUNTIME_BUILD=PASS")
 
     return RAW_INITRAMFS
@@ -708,7 +688,7 @@ def verify_runtime() -> Path:
 
     if metadata.get(
         "signing_owner"
-    ) != "pixel_partitioner":
+    ) != "downstream_consumer":
         raise TreeForgeBootstrapRuntimeError(
             "signing ownership changed"
         )
@@ -726,10 +706,10 @@ def verify_runtime() -> Path:
             "legacy LZ4 framing changed"
         )
 
-    print("VISIBLE_MENU_IDENTITY=TreeForge Menu")
-    print("LOW_LEVEL_PIXEL_PARTITIONER_ABI=PRESERVED")
+    print("VISIBLE_MENU_IDENTITY=TreeForge Boot Manager")
+    print("TREEFORGE_BOOTSTRAP_RUNTIME_ABI=V1")
     print("SIGNED_IMAGE=NO")
-    print("SIGNING_OWNER=Pixel Partitioner")
+    print("SIGNING_OWNER=DOWNSTREAM_CONSUMER")
     print("TREEFORGE_BOOTSTRAP_RUNTIME_VERIFY=PASS")
 
     return RAW_INITRAMFS

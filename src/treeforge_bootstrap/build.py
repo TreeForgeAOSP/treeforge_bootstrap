@@ -23,6 +23,14 @@ from .provider import (
     verify_provider,
 )
 
+from .image import (
+    build_image,
+    verify_image,
+)
+
+from .hardware import hardware_preflight
+from .interactive import interactive
+
 
 class TreeForgeBootstrapBuildError(
     RuntimeError
@@ -41,7 +49,7 @@ CANONICAL_PROVIDER = (
 ADBD_PROVIDER_ROOT = (
     PROVIDERS
     / "external"
-    / "pixel-partitioner-adbd"
+    / "treeforge-bootstrap-adbd"
     / "android-15.0.0_r36-arm64"
     / "rootfs"
 )
@@ -68,38 +76,9 @@ def _sha256(
 
 
 def _clang() -> Path:
-    override = os.environ.get(
-        "TREEFORGE_BOOTSTRAP_CLANG"
-    )
+    from .host_providers import ensure_clang
 
-    if override:
-        candidate = Path(
-            override
-        ).expanduser().resolve()
-
-        if not candidate.is_file():
-            raise TreeForgeBootstrapBuildError(
-                "TREEFORGE_BOOTSTRAP_CLANG "
-                "does not exist: "
-                f"{candidate}"
-            )
-
-        return candidate
-
-    discovered = shutil.which(
-        "clang"
-    )
-
-    if discovered is None:
-        raise TreeForgeBootstrapBuildError(
-            "clang is unavailable; set "
-            "TREEFORGE_BOOTSTRAP_CLANG"
-        )
-
-    return Path(
-        discovered
-    ).resolve()
-
+    return ensure_clang()
 
 def doctor() -> None:
     if not CANONICAL_PROVIDER.is_file():
@@ -120,7 +99,7 @@ def doctor() -> None:
 
     if not ADBD_PROVIDER_ROOT.is_dir():
         raise TreeForgeBootstrapBuildError(
-            "pixel-partitioner-adbd provider "
+            "treeforge-bootstrap-adbd provider "
             "rootfs missing: "
             f"{ADBD_PROVIDER_ROOT}"
         )
@@ -129,25 +108,31 @@ def doctor() -> None:
         ADBD_PROVIDER_ROOT
         / "system"
         / "bin"
-        / "pixel-partitioner-adbd"
+        / "treeforge-bootstrap-adbd"
     )
 
     if not adbd.is_file():
         raise TreeForgeBootstrapBuildError(
-            "pixel-partitioner-adbd binary "
+            "treeforge-bootstrap-adbd binary "
             f"missing: {adbd}"
         )
 
     if (
         _sha256(adbd)
-        != "938587531b1a4f6ee74d591ffd5be84459d43402e0ed54cadfa17283b680bef8"
+        != "46ab32860fc78a7556c47b71e8f4a2089f43492fd78bc30727f94a3b466e4109"
     ):
         raise TreeForgeBootstrapBuildError(
-            "pixel-partitioner-adbd "
+            "treeforge-bootstrap-adbd "
             "provider identity changed"
         )
 
     clang = _clang()
+
+    from .host_providers import ensure_host_tool
+
+    mkbootimg = ensure_host_tool("mkbootimg")
+    unpack_bootimg = ensure_host_tool("unpack_bootimg")
+    avbtool = ensure_host_tool("avbtool")
 
     lz4 = shutil.which(
         "lz4"
@@ -166,6 +151,9 @@ def doctor() -> None:
     print(f"Canonical SHA256:   {actual}")
     print(f"ADB provider:       {ADBD_PROVIDER_ROOT}")
     print(f"Clang:              {clang}")
+    print(f"Mkbootimg:          {mkbootimg}")
+    print(f"Unpack bootimg:     {unpack_bootimg}")
+    print(f"AVBTool:            {avbtool}")
     print(f"LZ4:                {Path(lz4).resolve()}")
     print(f"Work:               {WORK}")
     print(f"Output:             {OUT}")
@@ -182,16 +170,24 @@ def main() -> None:
 
     parser.add_argument(
         "command",
+        nargs="?",
         choices=(
             "doctor",
             "build",
             "verify",
             "package",
             "verify-provider",
+            "image",
+            "verify-image",
+            "hardware-preflight",
         ),
     )
 
     args = parser.parse_args()
+
+    if args.command is None:
+        interactive()
+        return
 
     if args.command == "doctor":
         doctor()
@@ -201,8 +197,14 @@ def main() -> None:
         verify_runtime()
     elif args.command == "package":
         package_provider()
-    else:
+    elif args.command == "verify-provider":
         verify_provider()
+    elif args.command == "image":
+        build_image()
+    elif args.command == "verify-image":
+        verify_image()
+    else:
+        hardware_preflight()
 
 
 if __name__ == "__main__":

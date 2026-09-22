@@ -1,0 +1,186 @@
+{
+  "schema": 1,
+  "profile_id": "treeforge-default",
+  "root": {
+    "id": "main",
+    "title": "TreeForge Boot Manager",
+    "subtitle": "Select Boot Option",
+    "default_entry": "android-a",
+    "timeout_ms": 0,
+    "entries": [
+      {
+        "id": "android-a",
+        "label": "Boot Android (Slot A)",
+        "action": "boot_android_slot_a",
+        "description": "Start the installed Android system",
+        "icon": "android"
+      },
+      {
+        "id": "recovery",
+        "label": "Boot Recovery",
+        "submenu": {
+          "id": "recovery-menu",
+          "title": "Recovery",
+          "subtitle": "Recovery is not implemented yet",
+          "default_entry": "recovery-back",
+          "timeout_ms": 0,
+          "entries": [
+            {
+              "id": "recovery-back",
+              "label": "Back",
+              "action": "back",
+              "description": "Return to the main boot menu",
+              "icon": "back"
+            }
+          ]
+        },
+        "description": "Recovery is not implemented yet",
+        "icon": "recovery"
+      },
+      {
+        "id": "maintenance",
+        "label": "Maintenance",
+        "submenu": {
+          "id": "maintenance-menu",
+          "title": "Maintenance",
+          "subtitle": "Tools and Advanced Options",
+          "default_entry": "pixel-partitioner",
+          "timeout_ms": 0,
+          "entries": [
+            {
+              "id": "pixel-partitioner",
+              "label": "Pixel Partitioner",
+              "submenu": {
+                "id": "pixel-partitioner-menu",
+                "title": "Pixel Partitioner",
+                "subtitle": "Reserved for future Pixel Partitioner integration",
+                "default_entry": "pixel-partitioner-back",
+                "timeout_ms": 0,
+                "entries": [
+                  {
+                    "id": "pixel-partitioner-back",
+                    "label": "Back",
+                    "action": "back",
+                    "description": "Return to Maintenance",
+                    "icon": "back"
+                  }
+                ]
+              },
+              "description": "Partition and storage management - future integration",
+              "icon": "pixel-partitioner"
+            },
+            {
+              "id": "maintenance-bootloader",
+              "label": "Reboot to Bootloader",
+              "action": "reboot_bootloader",
+              "description": "Restart into bootloader fastboot",
+              "icon": "bootloader"
+            },
+            {
+              "id": "maintenance-back",
+              "label": "Back",
+              "action": "back",
+              "description": "Return to the main boot menu",
+              "icon": "back"
+            }
+          ]
+        },
+        "description": "Tools and advanced options",
+        "icon": "maintenance"
+      },
+      {
+        "id": "alternate-os",
+        "label": "Boot Alternate OS",
+        "submenu": {
+          "id": "alternate-os-menu",
+          "title": "Alternate OS",
+          "subtitle": "Alternate Operating System",
+          "default_entry": "alternate-os-back",
+          "timeout_ms": 0,
+          "entries": [
+            {
+              "id": "alternate-os-boot",
+              "label": "Boot Alternate OS",
+              "action": "boot_alternate_os",
+              "visible_if": "alternate_os_configured",
+              "label_state": "alternate_os_name",
+              "description": "Start the configured alternate operating system",
+              "icon": "alternate-os"
+            },
+            {
+              "id": "alternate-os-back",
+              "label": "Back",
+              "action": "back",
+              "description": "Return to the main boot menu",
+              "icon": "back"
+            }
+          ]
+        },
+        "description": "No alternate OS installed",
+        "icon": "alternate-os"
+      },
+      {
+        "id": "root-menu",
+        "label": "Root Menu",
+        "submenu": {
+          "id": "android-root-menu",
+          "title": "Root Menu",
+          "subtitle": "Manage Root Installation",
+          "default_entry": "root-boot-android",
+          "timeout_ms": 0,
+          "entries": [
+            {
+              "id": "root-boot-android",
+              "label": "Boot Android (Slot A)",
+              "action": "boot_android_slot_a",
+              "description": "Start Android without root changes",
+              "icon": "android"
+            },
+            {
+              "id": "boot-rooted-android",
+              "label": "Boot Rooted Android",
+              "action": "boot_rooted_android",
+              "visible_if": "root_installed",
+              "description": "Start Android with the installed root environment",
+              "icon": "root"
+            },
+            {
+              "id": "install-root",
+              "label": "Install Root",
+              "action": "install_root",
+              "visible_if": "root_not_installed",
+              "description": "Install the configured root environment",
+              "icon": "root"
+            },
+            {
+              "id": "uninstall-root",
+              "label": "Uninstall Root",
+              "action": "uninstall_root",
+              "visible_if": "root_installed",
+              "description": "Remove the installed root environment",
+              "icon": "root"
+            },
+            {
+              "id": "root-persistence",
+              "label": "Root Persistence",
+              "action": "toggle_root_persistence",
+              "visible_if": "root_installed",
+              "label_state": "root_persistence",
+              "description": "Manage root persistence across Android updates",
+              "icon": "root"
+            },
+            {
+              "id": "root-back",
+              "label": "Back",
+              "action": "back",
+              "description": "Return to the main boot menu",
+              "icon": "back"
+            }
+          ]
+        },
+        "description": "Manage root installation",
+        "icon": "root"
+      }
+    ]
+  }
+}

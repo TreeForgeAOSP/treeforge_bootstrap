@@ -1,43 +1,63 @@
 # TreeForge Bootstrap
 
 TreeForge Bootstrap is the persistent on-device bootstrap and boot manager
-for Pixel Tablet multiboot work.
-
-This repository is a separate source lineage from Pixel Partitioner.
+for supported TreeForge multiboot environments.
 
 ## Ownership
 
-TreeForge Bootstrap owns the persistent boot-time environment and the
-TreeForge Menu.
+TreeForge Bootstrap owns the persistent early-runtime environment,
+hardware-facing bootstrap interfaces, menu engine, action dispatch,
+handoff machinery, and the default TreeForge Boot Manager.
 
-Pixel Partitioner owns device acquisition, storage conversion,
-repartitioning, installation orchestration, and its temporary maintenance
-runtime.
+The active runtime contract includes:
 
-## Current extraction stage
+- `/dev/treeforge_bootstrap_fb`
+- `TREEFORGE_BOOTSTRAP_FB_CONSUMER_V1`
+- `TREEFORGE_BOOTSTRAP_FB_BRIDGE_ONLY_V1`
+- `/dev/treeforge-bootstrap-runtime`
+- `/init.treeforge-bootstrap-first-stage`
+- `treeforge-bootstrap-adbd`
+- `treeforge-bootstrap-adb-service`
 
-The initial source split preserves the hardware-proven low-level runtime ABI
-from Pixel Partitioner while moving the persistent runtime source into this
-independent repository.
+Consumer projects provide their own menu profile and higher-level workflow
+while reusing the TreeForge Bootstrap runtime implementation.
 
-The following low-level names intentionally remain unchanged during the
-initial split because they are part of the already-proven runtime contract:
+## Signing boundary
 
-- `/dev/pixel_partitioner_fb`
-- the Pixel Partitioner framebuffer ABI markers
-- the existing first-stage/retained-runtime handoff paths
+TreeForge Bootstrap publishes unsigned runtime provider artifacts.
 
-They can be versioned independently later if needed.
+The downstream consumer owns final device-family image composition,
+AVB signing, installation policy, and device writes.
 
-No release/provider asset is published by this extraction patch yet.
+TreeForge Bootstrap does not own downstream signing keys and does not
+publish a pre-signed device installation image.
 
-## Build scaffold
+## Current platform
 
-TreeForge Bootstrap owns the persistent runtime and TreeForge Menu.
+The first v1.0 target is:
 
-The repository-local build entry point is:
+- device: `tangorpro`
+- platform: Android 15
+- architecture: arm64
+
+## Build
+
+The repository-local entry point is:
 
     ./treeforge-bootstrap doctor
 
-The provider artifact remains unsigned. Pixel Partitioner owns final
-device-family composition, AVB signing, and partition installation.
+Runtime and provider artifacts are rebuilt and verified before release.
+
+## Menu profiles
+
+TreeForge Bootstrap owns the menu engine, renderer, input handling,
+navigation, timeout behavior, action registry, and core action
+implementations.
+
+Consumers select the visible interface through a validated schema-v1
+menu profile. Profiles define titles, entry order, visibility conditions,
+submenus, defaults, timeout policy, and mappings to Bootstrap-supported
+actions; they do not reimplement framebuffer, input, reboot, or handoff
+logic.
+
+The built-in profile is `profiles/treeforge-default.json`.

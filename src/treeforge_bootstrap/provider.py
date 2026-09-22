@@ -61,20 +61,20 @@ PROVIDER_CHECKSUMS = (
 EXPECTED_RUNTIME = {
     "initramfs.cpio":
         (
-            "668dbbcfeab70b6b2b07c491e9df06c2"
-            "d0c9bdf9e825b2ba87abd26caf167f5a"
+            "c820b0a05b5eff86086cb7dd8d255f3"
+            "116adc1e27dbd073713b2d34aee7c5288"
         ),
 
     "initramfs.lz4":
         (
-            "4190ab036347d92bc9659dcebafcc848"
-            "34aa128a4c76e45e8f014bcbec54c784"
+            "eb3164e24752c0d9f02f32b0ce855d69"
+            "42b32909108e5e2e00da02ef4d17f8d8"
         ),
 
     "treeforge-menu":
         (
-            "ee3eea6bb4f91f51ed15eda266c184b1"
-            "10169d91242ff49c8aab8370b4c6c5d7"
+            "fd8a9a130377c1a856213239e45f844b"
+            "96ad41ac2b4d29d6f2dd24d163e45c31"
         ),
 }
 
@@ -161,7 +161,7 @@ def _provider_metadata(
         "variant":
             PROVIDER_VARIANT,
         "repository":
-            "TreeForgeDEV/treeforge_bootstrap",
+            "TreeForgeAOSP/treeforge_bootstrap",
         "role":
             "persistent-installed-bootstrap",
         "device":
@@ -169,11 +169,11 @@ def _provider_metadata(
         "platform":
             "android-15",
         "menu_identity":
-            "TreeForge Menu",
+            "TreeForge Boot Manager",
         "signed_image":
             False,
         "signing_owner":
-            "pixel_partitioner",
+            "downstream_consumer",
         "payload": {
             name: {
                 "bytes":
@@ -189,10 +189,10 @@ def _provider_metadata(
             )
         },
         "low_level_runtime_abi": {
-            "pixel_partitioner_framebuffer":
-                "preserved",
+            "treeforge_bootstrap_framebuffer":
+                "v1",
             "first_stage_handoff":
-                "preserved",
+                "v1",
         },
     }
 
@@ -421,7 +421,7 @@ def package_provider() -> Path:
         "SIGNED_IMAGE=NO"
     )
     print(
-        "SIGNING_OWNER=Pixel Partitioner"
+        "SIGNING_OWNER=DOWNSTREAM_CONSUMER"
     )
     print(
         "TREEFORGE_BOOTSTRAP_PROVIDER_PACKAGE=PASS"
@@ -581,7 +581,7 @@ def verify_provider() -> Path:
         metadata.get(
             "menu_identity"
         )
-        != "TreeForge Menu"
+        != "TreeForge Boot Manager"
     ):
         raise TreeForgeBootstrapProviderError(
             "provider menu identity changed"
@@ -601,7 +601,7 @@ def verify_provider() -> Path:
         metadata.get(
             "signing_owner"
         )
-        != "pixel_partitioner"
+        != "downstream_consumer"
     ):
         raise TreeForgeBootstrapProviderError(
             "provider signing ownership changed"
@@ -640,17 +640,17 @@ def verify_provider() -> Path:
     )
     print(
         "VISIBLE_MENU_IDENTITY="
-        "TreeForge Menu"
+        "TreeForge Boot Manager"
     )
     print(
-        "LOW_LEVEL_PIXEL_PARTITIONER_ABI="
-        "PRESERVED"
+        "TREEFORGE_BOOTSTRAP_RUNTIME_ABI="
+        "V1"
     )
     print(
         "SIGNED_IMAGE=NO"
     )
     print(
-        "SIGNING_OWNER=Pixel Partitioner"
+        "SIGNING_OWNER=DOWNSTREAM_CONSUMER"
     )
     print(
         f"PROVIDER_ARCHIVE_SHA256="

@@ -1,32 +1,35 @@
 {
   "artifact": {
-    "consumer_signing": "pixel_partitioner",
+    "consumer_signing": "downstream_consumer",
     "menu_identity": "TreeForge Menu",
     "name": "treeforge-bootstrap-tangorpro-android15-runtime.tar.xz",
-    "sha256": "c94ce84e58a105fe38e30000469747358571edd47b2216353a77a9d729f6c342",
-    "signed_image": false
+    "signed_image": false,
+    "sha256_state": "pending-v1-rebuild"
   },
-  "consumer": "pixel_partitioner",
+  "consumer": "downstream",
   "device": "tangorpro",
   "name": "treeforge-bootstrap",
   "platform": "android-15",
   "providers": {
-    "pixel-partitioner-adbd": {
+    "treeforge-bootstrap-adbd": {
       "architecture": "arm64",
-      "release": "android-15.0.0_r36-1",
-      "runtime_sha256": "938587531b1a4f6ee74d591ffd5be84459d43402e0ed54cadfa17283b680bef8"
+      "repository": "TreeForgeAOSP/treeforge_toolchain",
+      "release": "treeforge-bootstrap-adbd/android-15.0.0_r36-1",
+      "asset": "treeforge-bootstrap-adbd-android-15.0.0_r36-arm64.tar.xz",
+      "archive_sha256": "54d8df50b5982ba6b7e20150c73e10eb71f2f0627c19c3b761b2c6058cbf4aa9",
+      "runtime_sha256": "46ab32860fc78a7556c47b71e8f4a2089f43492fd78bc30727f94a3b466e4109"
     }
   },
-  "repository": "TreeForgeDEV/treeforge_bootstrap",
+  "repository": "TreeForgeAOSP/treeforge_bootstrap",
   "role": "persistent-installed-bootstrap",
   "runtime": {
     "assembly": "treeforge-source-plus-pinned-providers",
-    "consumer_signing": "pixel_partitioner",
-    "menu_identity": "TreeForge Menu",
-    "reproducible": true,
-    "runtime_seed": "retired",
+    "consumer_signing": "downstream_consumer",
+    "menu_identity": "TreeForge Boot Manager",
+    "reproducible": false,
+    "runtime_seed": "none",
     "signed_image": false
   },
   "schema": 1,
-  "status": "self-contained-local-provider-ready-not-released"
+  "status": "v1-source-clean-provider-rebuild-required"
 }

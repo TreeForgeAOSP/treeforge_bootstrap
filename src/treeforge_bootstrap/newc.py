@@ -171,7 +171,7 @@ def build_newc(
 
     return len(archive)
 
-# PIXEL_PARTITIONER_PRESERVING_NEWC_V1
+# TREEFORGE_BOOTSTRAP_PRESERVING_NEWC_V1
 #
 # The ordinary build_newc() helper above intentionally constructs a
 # deterministic archive from a filesystem tree.  That is appropriate for the
@@ -424,7 +424,7 @@ def parse_newc(
 
 
 
-# PIXEL_PARTITIONER_NEWC_ARCHIVE_PADDING_V1
+# TREEFORGE_BOOTSTRAP_NEWC_ARCHIVE_PADDING_V1
 #
 # Android init_boot CPIO archives may carry deterministic zero padding after
 # the aligned TRAILER!!! entry.  The padding is outside the logical newc entry
