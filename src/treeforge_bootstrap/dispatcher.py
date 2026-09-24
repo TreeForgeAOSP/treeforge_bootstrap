@@ -261,6 +261,69 @@ int memcmp(
 #define MAP_SHARED 1
 
 #define S_IFCHR 0020000
+#define S_IFBLK 0060000
+
+/*
+ * TFB_PIXEL_PARTITIONER_SERVICE_V1
+ *
+ * Entering the Pixel Partitioner submenu is the explicit authorization
+ * boundary for the host-side Pixel Partitioner CLI.
+ */
+#define TFB_PP_READY_MARKER \
+    "/dev/treeforge-bootstrap-pixel-partitioner-ready"
+
+#define TFB_PP_REPROBE_REQUEST \
+    "/dev/treeforge-bootstrap-block-reprobe-request"
+
+#define TFB_PP_REPROBE_READY \
+    "/dev/treeforge-bootstrap-block-reprobe-ready"
+
+#define TFB_PP_REPROBE_FAILED \
+    "/dev/treeforge-bootstrap-block-reprobe-failed"
+
+/*
+ * TFB_TARGETED_GPT_REFRESH_V1_1
+ *
+ * Bootstrap's Android handoff environment already has unrelated
+ * partitions in use. A whole-disk BLKRRPART therefore cannot be the
+ * runtime contract.
+ *
+ * Pixel Partitioner changes only the mutable tail:
+ *
+ *   sda26 = userdata
+ *   sda27 = treeforge_os
+ *
+ * Refresh those entries individually with Linux BLKPG.
+ */
+#define TFB_BLKPG 0x1269UL
+
+#define TFB_BLKPG_ADD_PARTITION 1
+#define TFB_BLKPG_DEL_PARTITION 2
+#define TFB_BLKPG_RESIZE_PARTITION 3
+
+#define TFB_GPT_LOGICAL_BLOCK_SIZE 4096ULL
+#define TFB_GPT_HEADER_OFFSET 4096ULL
+#define TFB_GPT_HEADER_READ_BYTES 92
+#define TFB_GPT_ENTRY_READ_BYTES 128
+
+#define TFB_MUTABLE_USERDATA_PARTITION 26
+#define TFB_MUTABLE_OS_PARTITION 27
+
+#ifndef SYS_LSEEK
+#define SYS_LSEEK 62
+#endif
+
+#define TFB_BLOCK_MAX_PARTITIONS 128
+#define TFB_BLOCK_PATH_CAPACITY 192
+#define TFB_BLOCK_UEVENT_CAPACITY 2048
+#define TFB_BLOCK_PARTNAME_CAPACITY 96
+
+/*
+ * Bootstrap-owned Android target.
+ *
+ * This is deliberately independent from the bootloader active slot.
+ */
+static int tfb_boot_target_slot = 0;
 
 #define MS_RDONLY 1
 #define MNT_DETACH 2
@@ -1577,6 +1640,9 @@ static const char tfb_version[] =
 #define TFB_ACTION_REBOOT_BOOTLOADER 8
 #define TFB_ACTION_REBOOT_RECOVERY 9
 #define TFB_ACTION_BACK 10
+#define TFB_ACTION_SET_BOOT_TARGET_SLOT_A 11
+#define TFB_ACTION_SET_BOOT_TARGET_SLOT_B 12
+#define TFB_ACTION_LIVE_CONSOLE 13
 
 #define TFB_CONDITION_ALWAYS 0
 #define TFB_CONDITION_FULL_AB 1
@@ -2209,6 +2275,27 @@ static const char *tfb_menu_action_name(
         == TFB_ACTION_REBOOT_RECOVERY
     ) {
         return "reboot_recovery";
+    }
+
+    if (
+        action
+        == TFB_ACTION_SET_BOOT_TARGET_SLOT_A
+    ) {
+        return "set_boot_target_slot_a";
+    }
+
+    if (
+        action
+        == TFB_ACTION_SET_BOOT_TARGET_SLOT_B
+    ) {
+        return "set_boot_target_slot_b";
+    }
+
+    if (
+        action
+        == TFB_ACTION_LIVE_CONSOLE
+    ) {
+        return "live_console";
     }
 
     if (
@@ -6521,6 +6608,601 @@ static void tfb_menu_cleanup_for_transition(
 }
 
 
+
+/*
+ * ================================================================
+ * TFB_LIVE_CONSOLE_V1
+ * ================================================================
+ *
+ * Read-only, on-device diagnostics console.
+ *
+ * Source:
+ *
+ *     /dev/kmsg
+ *
+ * The viewer owns no USB state and performs no ADB operation.
+ * TreeForge diagnostics emitted through tfb_log()/persistent kernel
+ * logging therefore remain visible even if the host USB session is
+ * lost.
+ *
+ * Controls:
+ *
+ *     Volume Up    scroll toward older records
+ *     Volume Down  scroll toward newer records
+ *     Power        return to Maintenance
+ *
+ * Touch events are deliberately ignored in V1.
+ */
+
+#define TFB_LIVE_CONSOLE_LINES 64
+#define TFB_LIVE_CONSOLE_LINE_BYTES 192
+#define TFB_LIVE_CONSOLE_VISIBLE_LINES 42
+#define TFB_LIVE_CONSOLE_SCROLL_STEP 4
+
+
+static char tfb_live_console_lines[
+    TFB_LIVE_CONSOLE_LINES
+][
+    TFB_LIVE_CONSOLE_LINE_BYTES
+];
+
+static int tfb_live_console_count = 0;
+static int tfb_live_console_next = 0;
+
+
+static int tfb_live_console_max_scroll(
+    void
+) {
+    if (
+        tfb_live_console_count
+        <= TFB_LIVE_CONSOLE_VISIBLE_LINES
+    ) {
+        return 0;
+    }
+
+    return (
+        tfb_live_console_count
+        - TFB_LIVE_CONSOLE_VISIBLE_LINES
+    );
+}
+
+
+static void tfb_live_console_append(
+    const char *record,
+    int *scroll
+) {
+    if (!record) {
+        return;
+    }
+
+    const char *message =
+        record;
+
+    /*
+     * /dev/kmsg records use:
+     *
+     *     level,sequence,timestamp,flags;message
+     *
+     * Display the message payload while retaining the exact kernel
+     * text after the metadata separator.
+     */
+    for (
+        int index = 0;
+        record[index] != '\0';
+        index++
+    ) {
+        if (
+            record[index]
+            == ';'
+        ) {
+            message = (
+                &record[index + 1]
+            );
+
+            break;
+        }
+    }
+
+    char *destination = (
+        tfb_live_console_lines[
+            tfb_live_console_next
+        ]
+    );
+
+    int position = 0;
+
+    while (
+        message[position] != '\0'
+        && position
+            < TFB_LIVE_CONSOLE_LINE_BYTES
+                - 1
+    ) {
+        char value =
+            message[position];
+
+        if (
+            value == '\n'
+            || value == '\r'
+        ) {
+            break;
+        }
+
+        if (value == '\t') {
+            value = ' ';
+        }
+
+        if (
+            value < 32
+            || value > 126
+        ) {
+            value = '.';
+        }
+
+        destination[position] =
+            value;
+
+        position++;
+    }
+
+    destination[position] = '\0';
+
+    if (position == 0) {
+        destination[0] = ' ';
+        destination[1] = '\0';
+    }
+
+    tfb_live_console_next = (
+        tfb_live_console_next
+        + 1
+    ) % TFB_LIVE_CONSOLE_LINES;
+
+    if (
+        tfb_live_console_count
+        < TFB_LIVE_CONSOLE_LINES
+    ) {
+        tfb_live_console_count++;
+    }
+
+    /*
+     * When the user has scrolled away from the live tail, preserve
+     * roughly the same historical viewport as new records arrive.
+     */
+    if (
+        scroll
+        && *scroll > 0
+    ) {
+        int maximum =
+            tfb_live_console_max_scroll();
+
+        if (*scroll < maximum) {
+            (*scroll)++;
+        }
+    }
+}
+
+
+static const char *tfb_live_console_line(
+    int logical_index
+) {
+    if (
+        logical_index < 0
+        || logical_index
+            >= tfb_live_console_count
+    ) {
+        return "";
+    }
+
+    int oldest = 0;
+
+    if (
+        tfb_live_console_count
+        == TFB_LIVE_CONSOLE_LINES
+    ) {
+        oldest =
+            tfb_live_console_next;
+    }
+
+    int physical = (
+        oldest
+        + logical_index
+    ) % TFB_LIVE_CONSOLE_LINES;
+
+    return (
+        tfb_live_console_lines[
+            physical
+        ]
+    );
+}
+
+
+static void tfb_live_console_render(
+    int scroll,
+    int kmsg_available
+) {
+    const u32 background =
+        0x00000000U;
+
+    const u32 foreground =
+        0x00e8eef2U;
+
+    const u32 dim =
+        0x008ca0b0U;
+
+    const u32 accent =
+        0x0000d4eeU;
+
+    const u32 green =
+        0x004ed87dU;
+
+    const u32 warning =
+        0x00e4c45cU;
+
+    if (
+        !tfb_fb_menu_active
+        || tfb_fb_menu_mapped_address < 0
+    ) {
+        return;
+    }
+
+    if (
+        !tfb_ui_landscape_supported()
+    ) {
+        tfb_fb_fill_rect(
+            0,
+            0,
+            tfb_fb_menu_width,
+            tfb_fb_menu_height,
+            background
+        );
+
+        tfb_fb_draw_text(
+            24U,
+            24U,
+            "TREEFORGE LIVE CONSOLE",
+            3U,
+            0x00ffffffU
+        );
+
+        tfb_fb_draw_text(
+            24U,
+            72U,
+            "LANDSCAPE GEOMETRY UNSUPPORTED",
+            2U,
+            0x00ffffffU
+        );
+
+        return;
+    }
+
+    tfb_ui_fill_rect(
+        0U,
+        0U,
+        TFB_UI_LOGICAL_WIDTH,
+        TFB_UI_LOGICAL_HEIGHT,
+        background
+    );
+
+    tfb_ui_draw_text(
+        80U,
+        48U,
+        "TREEFORGE LIVE CONSOLE",
+        5U,
+        accent
+    );
+
+    tfb_ui_draw_text(
+        80U,
+        108U,
+        (
+            kmsg_available
+            ? (
+                tfb_adb_connected()
+                ? "KERNEL LOG: LIVE    ADB: CONNECTED"
+                : "KERNEL LOG: LIVE    ADB/USB: NOT CONFIGURED"
+            )
+            : "KERNEL LOG: UNAVAILABLE"
+        ),
+        3U,
+        (
+            kmsg_available
+            ? (
+                tfb_adb_connected()
+                ? green
+                : warning
+            )
+            : warning
+        )
+    );
+
+    tfb_ui_draw_text(
+        80U,
+        154U,
+        (
+            scroll == 0
+            ? "VIEW: LIVE TAIL"
+            : "VIEW: SCROLLED / AUTO-FOLLOW PAUSED"
+        ),
+        2U,
+        dim
+    );
+
+    int maximum =
+        tfb_live_console_max_scroll();
+
+    if (scroll > maximum) {
+        scroll = maximum;
+    }
+
+    if (scroll < 0) {
+        scroll = 0;
+    }
+
+    int end = (
+        tfb_live_console_count
+        - scroll
+    );
+
+    if (end < 0) {
+        end = 0;
+    }
+
+    int start = (
+        end
+        - TFB_LIVE_CONSOLE_VISIBLE_LINES
+    );
+
+    if (start < 0) {
+        start = 0;
+    }
+
+    u32 y = 218U;
+
+    for (
+        int index = start;
+        index < end;
+        index++
+    ) {
+        tfb_ui_draw_text(
+            80U,
+            y,
+            tfb_live_console_line(
+                index
+            ),
+            2U,
+            foreground
+        );
+
+        y += 29U;
+    }
+
+    tfb_ui_fill_rect(
+        0U,
+        1502U,
+        TFB_UI_LOGICAL_WIDTH,
+        98U,
+        0x00060b12U
+    );
+
+    tfb_ui_draw_text(
+        80U,
+        1530U,
+        "VOL UP/DOWN: SCROLL    POWER: BACK",
+        3U,
+        dim
+    );
+}
+
+
+static void tfb_live_console_run(
+    long *inputs
+) {
+    tfb_log(
+        "TFB_LIVE_CONSOLE_V1 enter"
+    );
+
+    /*
+     * Start every visit at the live tail but retain the ring itself so
+     * leaving/re-entering the viewer does not erase captured evidence.
+     */
+    int scroll = 0;
+    int redraw = 1;
+
+    long kmsg = tfb_open(
+        "/dev/kmsg",
+        O_RDONLY
+        | O_NONBLOCK
+    );
+
+    int kmsg_available = (
+        kmsg >= 0
+    );
+
+    if (!kmsg_available) {
+        tfb_log(
+            "TFB_LIVE_CONSOLE_V1 kmsg-open-failed"
+        );
+    } else {
+        tfb_log(
+            "TFB_LIVE_CONSOLE_V1 kmsg-open-ok"
+        );
+    }
+
+    int last_adb_state =
+        tfb_adb_connected();
+
+    for (;;) {
+        /*
+         * Drain a bounded amount of kernel backlog per iteration.
+         * A separate /dev/kmsg descriptor has its own reader cursor and
+         * does not consume TreeForge's writer descriptor.
+         */
+        if (kmsg_available) {
+            for (
+                int record_index = 0;
+                record_index < 256;
+                record_index++
+            ) {
+                char record[512];
+
+                long amount = (
+                    tfb_syscall3(
+                        SYS_READ,
+                        kmsg,
+                        (long) record,
+                        (long) (
+                            sizeof(record) - 1
+                        )
+                    )
+                );
+
+                if (amount <= 0) {
+                    break;
+                }
+
+                record[amount] = '\0';
+
+                tfb_live_console_append(
+                    record,
+                    &scroll
+                );
+
+                redraw = 1;
+            }
+        }
+
+        int adb_state =
+            tfb_adb_connected();
+
+        if (
+            adb_state
+            != last_adb_state
+        ) {
+            last_adb_state =
+                adb_state;
+
+            redraw = 1;
+        }
+
+        if (inputs) {
+            for (
+                int input_index = 0;
+                input_index < INPUT_COUNT;
+                input_index++
+            ) {
+                if (
+                    inputs[input_index]
+                    < 0
+                ) {
+                    continue;
+                }
+
+                for (;;) {
+                    struct tfb_input_event
+                        event;
+
+                    long amount = (
+                        tfb_syscall3(
+                            SYS_READ,
+                            inputs[input_index],
+                            (long) &event,
+                            (long)
+                                sizeof(event)
+                        )
+                    );
+
+                    if (
+                        amount
+                        != (long)
+                            sizeof(event)
+                    ) {
+                        break;
+                    }
+
+                    if (
+                        event.type != EV_KEY
+                        || event.value != 1
+                    ) {
+                        continue;
+                    }
+
+                    if (
+                        event.code
+                        == KEY_VOLUMEUP
+                    ) {
+                        int maximum =
+                            tfb_live_console_max_scroll();
+
+                        scroll +=
+                            TFB_LIVE_CONSOLE_SCROLL_STEP;
+
+                        if (
+                            scroll > maximum
+                        ) {
+                            scroll =
+                                maximum;
+                        }
+
+                        redraw = 1;
+
+                        continue;
+                    }
+
+                    if (
+                        event.code
+                        == KEY_VOLUMEDOWN
+                    ) {
+                        scroll -=
+                            TFB_LIVE_CONSOLE_SCROLL_STEP;
+
+                        if (scroll < 0) {
+                            scroll = 0;
+                        }
+
+                        redraw = 1;
+
+                        continue;
+                    }
+
+                    if (
+                        event.code
+                        != KEY_POWER
+                    ) {
+                        continue;
+                    }
+
+                    if (kmsg >= 0) {
+                        tfb_close(
+                            kmsg
+                        );
+
+                        kmsg = -1;
+                    }
+
+                    tfb_log(
+                        "TFB_LIVE_CONSOLE_V1 exit"
+                    );
+
+                    return;
+                }
+            }
+        }
+
+        if (redraw) {
+            tfb_live_console_render(
+                scroll,
+                kmsg_available
+            );
+
+            redraw = 0;
+        }
+
+        tfb_sleep_ms(
+            POLL_INTERVAL_MS
+        );
+    }
+}
+
+
 static void tfb_menu_execute_action(
     int action,
     long *inputs,
@@ -6532,6 +7214,69 @@ static void tfb_menu_execute_action(
             action
         )
     );
+
+
+    if (
+        action
+        == TFB_ACTION_LIVE_CONSOLE
+    ) {
+        tfb_log(
+            "early-menu action=live_console"
+        );
+
+        tfb_live_console_run(
+            inputs
+        );
+
+        tfb_menu_status =
+            "LIVE CONSOLE CLOSED";
+
+        return;
+    }
+
+    if (
+        action
+        == TFB_ACTION_SET_BOOT_TARGET_SLOT_A
+    ) {
+        tfb_boot_target_slot = 0;
+
+        tfb_menu_status = (
+            tfb_boot_target_slot == 0
+            ? "BOOT TARGET: SLOT A"
+            : "BOOT TARGET ERROR"
+        );
+
+        tfb_log(
+            "boot-target=slot-a"
+        );
+
+        return;
+    }
+
+    if (
+        action
+        == TFB_ACTION_SET_BOOT_TARGET_SLOT_B
+    ) {
+        tfb_boot_target_slot = 1;
+
+        tfb_menu_status = (
+            tfb_boot_target_slot == 1
+            ? "BOOT TARGET: SLOT B"
+            : "BOOT TARGET ERROR"
+        );
+
+        tfb_log(
+            "boot-target=slot-b"
+        );
+
+        /*
+         * No bootloader active-slot mutation occurs here.
+         *
+         * The later Bootstrap-owned cross-slot handoff consumes this
+         * state instead.
+         */
+        return;
+    }
 
     if (
         action
@@ -7122,6 +7867,1735 @@ static int tfb_touch_process_event(
  *
  * KEY_POWER and a completed touchscreen tap both arrive here.
  */
+
+/*
+ * ================================================================
+ * TFB_PIXEL_PARTITIONER_BLOCK_RUNTIME_V1
+ * ================================================================
+ *
+ * Reuse the existing Bootstrap device-node infrastructure:
+ *
+ *   tfb_runtime_parse_device_number()
+ *   tfb_runtime_makedev()
+ *   SYS_MKNODAT
+ *   SYS_SYMLINKAT
+ *
+ * BusyBox remains completely outside device realization.
+ */
+
+static int tfb_block_make_path(
+    char *output,
+    usize capacity,
+    const char *prefix,
+    int partition,
+    const char *suffix
+) {
+    if (
+        !output
+        || !prefix
+        || !suffix
+        || capacity < 2
+        || partition < 0
+    ) {
+        return -1;
+    }
+
+    usize position = 0;
+
+    for (
+        usize index = 0;
+        prefix[index] != '\0';
+        index++
+    ) {
+        if (
+            position + 1
+            >= capacity
+        ) {
+            return -1;
+        }
+
+        output[position++] =
+            prefix[index];
+    }
+
+    if (partition > 0) {
+        char digits[16];
+        int count = 0;
+
+        unsigned int value =
+            (unsigned int)
+                partition;
+
+        do {
+            if (
+                count
+                >= (int)
+                    sizeof(digits)
+            ) {
+                return -1;
+            }
+
+            digits[count++] = (
+                (char) (
+                    '0'
+                    + (
+                        value
+                        % 10U
+                    )
+                )
+            );
+
+            value /= 10U;
+
+        } while (value != 0U);
+
+        while (count > 0) {
+            count--;
+
+            if (
+                position + 1
+                >= capacity
+            ) {
+                return -1;
+            }
+
+            output[position++] =
+                digits[count];
+        }
+    }
+
+    for (
+        usize index = 0;
+        suffix[index] != '\0';
+        index++
+    ) {
+        if (
+            position + 1
+            >= capacity
+        ) {
+            return -1;
+        }
+
+        output[position++] =
+            suffix[index];
+    }
+
+    output[position] = '\0';
+
+    return 0;
+}
+
+
+static long tfb_block_read_text(
+    const char *path,
+    char *buffer,
+    usize capacity
+) {
+    if (
+        !path
+        || !buffer
+        || capacity < 2
+    ) {
+        return -1;
+    }
+
+    long fd = tfb_open(
+        path,
+        O_RDONLY
+    );
+
+    if (fd < 0) {
+        return fd;
+    }
+
+    long amount = tfb_syscall3(
+        SYS_READ,
+        fd,
+        (long) buffer,
+        (long) (
+            capacity - 1
+        )
+    );
+
+    tfb_close(
+        fd
+    );
+
+    if (amount < 0) {
+        return amount;
+    }
+
+    buffer[amount] = '\0';
+
+    return amount;
+}
+
+
+static int tfb_block_device_number(
+    int partition,
+    unsigned long *major,
+    unsigned long *minor
+) {
+    char path[
+        TFB_BLOCK_PATH_CAPACITY
+    ];
+
+    if (
+        tfb_block_make_path(
+            path,
+            sizeof(path),
+            "/sys/class/block/sda",
+            partition,
+            "/dev"
+        )
+        != 0
+    ) {
+        return -1;
+    }
+
+    char value[32];
+
+    long amount = tfb_block_read_text(
+        path,
+        value,
+        sizeof(value)
+    );
+
+    if (amount <= 0) {
+        return -1;
+    }
+
+    return tfb_runtime_parse_device_number(
+        value,
+        amount,
+        major,
+        minor
+    );
+}
+
+
+static int tfb_block_partname(
+    int partition,
+    char *output,
+    usize capacity
+) {
+    if (
+        partition <= 0
+        || !output
+        || capacity < 2
+    ) {
+        return -1;
+    }
+
+    char path[
+        TFB_BLOCK_PATH_CAPACITY
+    ];
+
+    if (
+        tfb_block_make_path(
+            path,
+            sizeof(path),
+            "/sys/class/block/sda",
+            partition,
+            "/uevent"
+        )
+        != 0
+    ) {
+        return -1;
+    }
+
+    char uevent[
+        TFB_BLOCK_UEVENT_CAPACITY
+    ];
+
+    long amount = tfb_block_read_text(
+        path,
+        uevent,
+        sizeof(uevent)
+    );
+
+    if (amount <= 0) {
+        return -1;
+    }
+
+    static const char prefix[] =
+        "PARTNAME=";
+
+    for (
+        long position = 0;
+        position < amount;
+        position++
+    ) {
+        if (
+            position > 0
+            && uevent[
+                position - 1
+            ] != '\n'
+        ) {
+            continue;
+        }
+
+        int match = 1;
+
+        for (
+            usize index = 0;
+            prefix[index] != '\0';
+            index++
+        ) {
+            if (
+                position
+                    + (long) index
+                    >= amount
+                || uevent[
+                    position
+                    + (long) index
+                ]
+                    != prefix[index]
+            ) {
+                match = 0;
+                break;
+            }
+        }
+
+        if (!match) {
+            continue;
+        }
+
+        long source = (
+            position
+            + (long) (
+                sizeof(prefix)
+                - 1
+            )
+        );
+
+        usize destination = 0;
+
+        while (
+            source < amount
+            && uevent[source]
+                != '\0'
+            && uevent[source]
+                != '\n'
+            && uevent[source]
+                != '\r'
+        ) {
+            if (
+                destination + 1
+                >= capacity
+                || uevent[source]
+                    == '/'
+            ) {
+                return -1;
+            }
+
+            output[
+                destination++
+            ] = uevent[
+                source++
+            ];
+        }
+
+        if (destination == 0) {
+            return -1;
+        }
+
+        output[destination] =
+            '\0';
+
+        return 0;
+    }
+
+    return -1;
+}
+
+
+static int tfb_realize_block_node(
+    int partition
+) {
+    unsigned long major = 0;
+    unsigned long minor = 0;
+
+    if (
+        tfb_block_device_number(
+            partition,
+            &major,
+            &minor
+        )
+        != 0
+    ) {
+        return -1;
+    }
+
+    char node[
+        TFB_BLOCK_PATH_CAPACITY
+    ];
+
+    if (
+        tfb_block_make_path(
+            node,
+            sizeof(node),
+            "/dev/block/sda",
+            partition,
+            ""
+        )
+        != 0
+    ) {
+        return -1;
+    }
+
+    long result = tfb_syscall4(
+        SYS_MKNODAT,
+        AT_FDCWD,
+        (long) node,
+        S_IFBLK | 0600,
+        (long) tfb_runtime_makedev(
+            major,
+            minor
+        )
+    );
+
+    /*
+     * EEXIST is idempotent success.
+     */
+    if (
+        result != 0
+        && result != -17
+    ) {
+        return -1;
+    }
+
+    if (partition == 0) {
+        return 0;
+    }
+
+    char partname[
+        TFB_BLOCK_PARTNAME_CAPACITY
+    ];
+
+    if (
+        tfb_block_partname(
+            partition,
+            partname,
+            sizeof(partname)
+        )
+        != 0
+    ) {
+        /*
+         * A valid block node without PARTNAME remains usable.
+         */
+        return 0;
+    }
+
+    char link[
+        TFB_BLOCK_PATH_CAPACITY
+    ];
+
+    static const char prefix[] =
+        "/dev/block/by-name/";
+
+    usize position = 0;
+
+    for (
+        usize index = 0;
+        prefix[index] != '\0';
+        index++
+    ) {
+        if (
+            position + 1
+            >= sizeof(link)
+        ) {
+            return -1;
+        }
+
+        link[position++] =
+            prefix[index];
+    }
+
+    for (
+        usize index = 0;
+        partname[index] != '\0';
+        index++
+    ) {
+        if (
+            position + 1
+            >= sizeof(link)
+        ) {
+            return -1;
+        }
+
+        link[position++] =
+            partname[index];
+    }
+
+    link[position] = '\0';
+
+    result = tfb_syscall3(
+        SYS_SYMLINKAT,
+        (long) node,
+        AT_FDCWD,
+        (long) link
+    );
+
+    /*
+     * Existing by-name aliases are accepted.
+     */
+    if (
+        result != 0
+        && result != -17
+    ) {
+        return -1;
+    }
+
+    return 0;
+}
+
+
+static int tfb_realize_block_nodes(
+    void
+) {
+    long result = tfb_syscall3(
+        SYS_MKDIRAT,
+        AT_FDCWD,
+        (long) "/dev/block",
+        0755
+    );
+
+    if (
+        result != 0
+        && result != -17
+    ) {
+        return -1;
+    }
+
+    result = tfb_syscall3(
+        SYS_MKDIRAT,
+        AT_FDCWD,
+        (long)
+            "/dev/block/by-name",
+        0755
+    );
+
+    if (
+        result != 0
+        && result != -17
+    ) {
+        return -1;
+    }
+
+    /*
+     * Whole physical UFS disk.
+     */
+    if (
+        tfb_realize_block_node(
+            0
+        )
+        != 0
+    ) {
+        return -1;
+    }
+
+    int failures = 0;
+
+    for (
+        int partition = 1;
+        partition
+            < TFB_BLOCK_MAX_PARTITIONS;
+        partition++
+    ) {
+        char sysfs_path[
+            TFB_BLOCK_PATH_CAPACITY
+        ];
+
+        if (
+            tfb_block_make_path(
+                sysfs_path,
+                sizeof(sysfs_path),
+                "/sys/class/block/sda",
+                partition,
+                "/dev"
+            )
+            != 0
+        ) {
+            failures++;
+            continue;
+        }
+
+        long probe = tfb_open(
+            sysfs_path,
+            O_RDONLY
+        );
+
+        if (probe < 0) {
+            continue;
+        }
+
+        tfb_close(
+            probe
+        );
+
+        if (
+            tfb_realize_block_node(
+                partition
+            )
+            != 0
+        ) {
+            failures++;
+        }
+    }
+
+    return (
+        failures == 0
+        ? 0
+        : -1
+    );
+}
+
+
+static void tfb_pp_remove_marker(
+    const char *path
+) {
+    tfb_syscall3(
+        SYS_UNLINKAT,
+        AT_FDCWD,
+        (long) path,
+        0
+    );
+}
+
+
+static int tfb_pp_write_marker(
+    const char *path
+) {
+    long fd = tfb_syscall4(
+        SYS_OPENAT,
+        AT_FDCWD,
+        (long) path,
+        O_WRONLY
+            | O_CREAT
+            | O_TRUNC,
+        0644
+    );
+
+    if (fd < 0) {
+        return 0;
+    }
+
+    tfb_write_all(
+        fd,
+        "1\n"
+    );
+
+    tfb_close(
+        fd
+    );
+
+    return 1;
+}
+
+
+static int tfb_pixel_partitioner_page(
+    const struct tfb_menu_page *page
+) {
+    return (
+        page
+        && page->title
+        && tfb_string_equal(
+            page->title,
+            "Pixel Partitioner"
+        )
+    );
+}
+
+
+static void tfb_pixel_partitioner_deactivate(
+    void
+) {
+    tfb_pp_remove_marker(
+        TFB_PP_READY_MARKER
+    );
+
+    tfb_pp_remove_marker(
+        TFB_PP_REPROBE_REQUEST
+    );
+
+    tfb_pp_remove_marker(
+        TFB_PP_REPROBE_READY
+    );
+
+    tfb_pp_remove_marker(
+        TFB_PP_REPROBE_FAILED
+    );
+
+    tfb_log(
+        "pixel-partitioner-service=inactive"
+    );
+}
+
+
+static int tfb_pixel_partitioner_activate(
+    void
+) {
+    tfb_pixel_partitioner_deactivate();
+
+    if (
+        tfb_realize_block_nodes()
+        != 0
+    ) {
+        tfb_log(
+            "pixel-partitioner-block-devices=failed"
+        );
+
+        return 0;
+    }
+
+    if (
+        !tfb_pp_write_marker(
+            TFB_PP_READY_MARKER
+        )
+    ) {
+        tfb_log(
+            "pixel-partitioner-ready-marker=failed"
+        );
+
+        return 0;
+    }
+
+    tfb_log(
+        "pixel-partitioner-block-devices=ready"
+    );
+
+    tfb_log(
+        "pixel-partitioner-service=ready"
+    );
+
+    return 1;
+}
+
+
+/*
+ * TFB_PIXEL_PARTITIONER_GPT_REPROBE_V1_1
+ *
+ * The external marker protocol intentionally keeps the "reprobe"
+ * name for compatibility.
+ *
+ * Internally this is a targeted GPT tail refresh:
+ *
+ *   sda26 -> resize userdata to the geometry now stored in GPT
+ *   sda27 -> add/resize/delete treeforge_os to match GPT
+ *
+ * Unrelated live Android partitions are never dropped or rescanned.
+ */
+
+struct tfb_blkpg_partition {
+    long long start;
+    long long length;
+    int pno;
+    char devname[64];
+    char volname[64];
+};
+
+
+struct tfb_blkpg_ioctl_arg {
+    int op;
+    int flags;
+    int datalen;
+    void *data;
+};
+
+
+struct tfb_gpt_partition_target {
+    int present;
+
+    unsigned long long
+        start_bytes;
+
+    unsigned long long
+        length_bytes;
+
+    char name[
+        TFB_BLOCK_PARTNAME_CAPACITY
+    ];
+};
+
+
+static unsigned int tfb_read_le32(
+    const unsigned char *value
+) {
+    return (
+        ((unsigned int) value[0])
+        | (
+            ((unsigned int) value[1])
+            << 8
+        )
+        | (
+            ((unsigned int) value[2])
+            << 16
+        )
+        | (
+            ((unsigned int) value[3])
+            << 24
+        )
+    );
+}
+
+
+static unsigned long long
+tfb_read_le64(
+    const unsigned char *value
+) {
+    unsigned long long result = 0;
+
+    for (
+        int index = 7;
+        index >= 0;
+        index--
+    ) {
+        result <<= 8;
+
+        result |= (
+            (unsigned long long)
+                value[index]
+        );
+    }
+
+    return result;
+}
+
+
+static int tfb_block_read_exact_at(
+    long fd,
+    unsigned long long offset,
+    unsigned char *buffer,
+    usize amount
+) {
+    if (
+        fd < 0
+        || !buffer
+    ) {
+        return -1;
+    }
+
+    long seek = tfb_syscall3(
+        SYS_LSEEK,
+        fd,
+        (long) offset,
+        0
+    );
+
+    if (
+        seek
+        != (long) offset
+    ) {
+        return -1;
+    }
+
+    usize done = 0;
+
+    while (done < amount) {
+        long received = tfb_syscall3(
+            SYS_READ,
+            fd,
+            (long) (
+                buffer + done
+            ),
+            (long) (
+                amount - done
+            )
+        );
+
+        if (received <= 0) {
+            return -1;
+        }
+
+        done += (
+            (usize) received
+        );
+    }
+
+    return 0;
+}
+
+
+static int tfb_gpt_decode_name(
+    const unsigned char *entry,
+    char *output,
+    usize capacity
+) {
+    if (
+        !entry
+        || !output
+        || capacity < 2
+    ) {
+        return -1;
+    }
+
+    usize destination = 0;
+
+    for (
+        int index = 0;
+        index < 36;
+        index++
+    ) {
+        unsigned char low = (
+            entry[
+                56
+                + (index * 2)
+            ]
+        );
+
+        unsigned char high = (
+            entry[
+                57
+                + (index * 2)
+            ]
+        );
+
+        if (
+            low == 0
+            && high == 0
+        ) {
+            break;
+        }
+
+        /*
+         * Current tangorpro GPT names are ASCII.
+         *
+         * Reject anything that cannot safely become a by-name
+         * component.
+         */
+        if (
+            high != 0
+            || low < 0x20
+            || low == '/'
+            || destination + 1
+                >= capacity
+        ) {
+            return -1;
+        }
+
+        output[destination++] =
+            (char) low;
+    }
+
+    if (destination == 0) {
+        return -1;
+    }
+
+    output[destination] = '\0';
+
+    return 0;
+}
+
+
+static int tfb_gpt_read_partition_target(
+    long fd,
+    int partition,
+    struct tfb_gpt_partition_target
+        *target
+) {
+    if (
+        fd < 0
+        || partition <= 0
+        || !target
+    ) {
+        return -1;
+    }
+
+    target->present = 0;
+    target->start_bytes = 0;
+    target->length_bytes = 0;
+    target->name[0] = '\0';
+
+    unsigned char header[
+        TFB_GPT_HEADER_READ_BYTES
+    ];
+
+    if (
+        tfb_block_read_exact_at(
+            fd,
+            TFB_GPT_HEADER_OFFSET,
+            header,
+            sizeof(header)
+        )
+        != 0
+    ) {
+        return -1;
+    }
+
+    static const unsigned char
+        signature[8] = {
+            'E',
+            'F',
+            'I',
+            ' ',
+            'P',
+            'A',
+            'R',
+            'T'
+        };
+
+    for (
+        int index = 0;
+        index < 8;
+        index++
+    ) {
+        if (
+            header[index]
+            != signature[index]
+        ) {
+            return -1;
+        }
+    }
+
+    unsigned long long
+        entries_lba = (
+            tfb_read_le64(
+                header + 72
+            )
+        );
+
+    unsigned int entry_count = (
+        tfb_read_le32(
+            header + 80
+        )
+    );
+
+    unsigned int entry_size = (
+        tfb_read_le32(
+            header + 84
+        )
+    );
+
+    if (
+        entry_size
+            < TFB_GPT_ENTRY_READ_BYTES
+        || entry_size > 4096U
+        || entries_lba == 0
+    ) {
+        return -1;
+    }
+
+    /*
+     * TFB_GPT_OPTIONAL_OUTSIDE_ARRAY_ABSENT_V1_1
+     *
+     * Stock tangorpro currently declares exactly 26 GPT entries.
+     * treeforge_os will become partition 27 only after the storage
+     * split expands the GPT.
+     *
+     * A requested partition number beyond the current entry array
+     * therefore means "not present yet", not malformed GPT.
+     *
+     * Required callers still fail closed by checking target->present.
+     */
+    if (
+        (unsigned int) partition
+            > entry_count
+    ) {
+        tfb_log(
+            "pixel-partitioner-gpt=outside-entry-array-absent"
+        );
+
+        return 0;
+    }
+
+    unsigned long long
+        entry_offset = (
+            (
+                entries_lba
+                * TFB_GPT_LOGICAL_BLOCK_SIZE
+            )
+            + (
+                (
+                    (unsigned long long)
+                        (partition - 1)
+                )
+                * (
+                    (unsigned long long)
+                        entry_size
+                )
+            )
+        );
+
+    unsigned char entry[
+        TFB_GPT_ENTRY_READ_BYTES
+    ];
+
+    if (
+        tfb_block_read_exact_at(
+            fd,
+            entry_offset,
+            entry,
+            sizeof(entry)
+        )
+        != 0
+    ) {
+        return -1;
+    }
+
+    int type_present = 0;
+
+    for (
+        int index = 0;
+        index < 16;
+        index++
+    ) {
+        if (entry[index] != 0) {
+            type_present = 1;
+            break;
+        }
+    }
+
+    if (!type_present) {
+        return 0;
+    }
+
+    unsigned long long
+        first_lba = (
+            tfb_read_le64(
+                entry + 32
+            )
+        );
+
+    unsigned long long
+        last_lba = (
+            tfb_read_le64(
+                entry + 40
+            )
+        );
+
+    if (
+        last_lba < first_lba
+        || first_lba
+            > (
+                18446744073709551615ULL
+                / TFB_GPT_LOGICAL_BLOCK_SIZE
+            )
+        || (
+            last_lba
+            - first_lba
+            + 1ULL
+        )
+            > (
+                18446744073709551615ULL
+                / TFB_GPT_LOGICAL_BLOCK_SIZE
+            )
+    ) {
+        return -1;
+    }
+
+    if (
+        tfb_gpt_decode_name(
+            entry,
+            target->name,
+            sizeof(target->name)
+        )
+        != 0
+    ) {
+        return -1;
+    }
+
+    target->present = 1;
+
+    target->start_bytes = (
+        first_lba
+        * TFB_GPT_LOGICAL_BLOCK_SIZE
+    );
+
+    target->length_bytes = (
+        (
+            last_lba
+            - first_lba
+            + 1ULL
+        )
+        * TFB_GPT_LOGICAL_BLOCK_SIZE
+    );
+
+    return 0;
+}
+
+
+static int tfb_sysfs_partition_exists(
+    int partition
+) {
+    char path[
+        TFB_BLOCK_PATH_CAPACITY
+    ];
+
+    if (
+        tfb_block_make_path(
+            path,
+            sizeof(path),
+            "/sys/class/block/sda",
+            partition,
+            "/dev"
+        )
+        != 0
+    ) {
+        return 0;
+    }
+
+    long fd = tfb_open(
+        path,
+        O_RDONLY
+    );
+
+    if (fd < 0) {
+        return 0;
+    }
+
+    tfb_close(
+        fd
+    );
+
+    return 1;
+}
+
+
+static long tfb_blkpg_operation(
+    long disk_fd,
+    int operation,
+    int partition,
+    unsigned long long start_bytes,
+    unsigned long long length_bytes
+) {
+    struct tfb_blkpg_partition
+        target = {0};
+
+    target.start = (
+        (long long)
+            start_bytes
+    );
+
+    target.length = (
+        (long long)
+            length_bytes
+    );
+
+    target.pno = partition;
+
+    struct tfb_blkpg_ioctl_arg
+        request = {0};
+
+    request.op = operation;
+
+    request.datalen = (
+        (int) sizeof(target)
+    );
+
+    request.data = &target;
+
+    return tfb_syscall3(
+        SYS_IOCTL,
+        disk_fd,
+        TFB_BLKPG,
+        (long) &request
+    );
+}
+
+
+static void tfb_log_blkpg_failure(
+    long result
+) {
+    if (result == -16) {
+        tfb_log(
+            "pixel-partitioner-blkpg=ebusy"
+        );
+        return;
+    }
+
+    if (result == -22) {
+        tfb_log(
+            "pixel-partitioner-blkpg=einval"
+        );
+        return;
+    }
+
+    if (result == -13) {
+        tfb_log(
+            "pixel-partitioner-blkpg=eacces"
+        );
+        return;
+    }
+
+    if (result == -6) {
+        tfb_log(
+            "pixel-partitioner-blkpg=enxio"
+        );
+        return;
+    }
+
+    tfb_log(
+        "pixel-partitioner-blkpg=other-error"
+    );
+}
+
+
+static int tfb_block_create_gpt_alias(
+    int partition,
+    const char *name
+) {
+    if (
+        partition <= 0
+        || !name
+        || !name[0]
+    ) {
+        return -1;
+    }
+
+    char node[
+        TFB_BLOCK_PATH_CAPACITY
+    ];
+
+    if (
+        tfb_block_make_path(
+            node,
+            sizeof(node),
+            "/dev/block/sda",
+            partition,
+            ""
+        )
+        != 0
+    ) {
+        return -1;
+    }
+
+    char link[
+        TFB_BLOCK_PATH_CAPACITY
+    ];
+
+    static const char prefix[] =
+        "/dev/block/by-name/";
+
+    usize position = 0;
+
+    for (
+        usize index = 0;
+        prefix[index] != '\0';
+        index++
+    ) {
+        if (
+            position + 1
+            >= sizeof(link)
+        ) {
+            return -1;
+        }
+
+        link[position++] =
+            prefix[index];
+    }
+
+    for (
+        usize index = 0;
+        name[index] != '\0';
+        index++
+    ) {
+        if (
+            name[index] == '/'
+            || position + 1
+                >= sizeof(link)
+        ) {
+            return -1;
+        }
+
+        link[position++] =
+            name[index];
+    }
+
+    link[position] = '\0';
+
+    long result = tfb_syscall3(
+        SYS_SYMLINKAT,
+        (long) node,
+        AT_FDCWD,
+        (long) link
+    );
+
+    if (
+        result != 0
+        && result != -17
+    ) {
+        return -1;
+    }
+
+    return 0;
+}
+
+
+static void tfb_remove_treeforge_os_nodes(
+    void
+) {
+    tfb_syscall3(
+        SYS_UNLINKAT,
+        AT_FDCWD,
+        (long)
+            "/dev/block/by-name/treeforge_os",
+        0
+    );
+
+    tfb_syscall3(
+        SYS_UNLINKAT,
+        AT_FDCWD,
+        (long)
+            "/dev/block/sda27",
+        0
+    );
+}
+
+
+static int tfb_refresh_one_gpt_partition(
+    long disk_fd,
+    int partition,
+    const struct tfb_gpt_partition_target
+        *target
+) {
+    if (
+        disk_fd < 0
+        || partition <= 0
+        || !target
+    ) {
+        return -1;
+    }
+
+    int exists = (
+        tfb_sysfs_partition_exists(
+            partition
+        )
+    );
+
+    if (!target->present) {
+        if (!exists) {
+            if (
+                partition
+                == TFB_MUTABLE_OS_PARTITION
+            ) {
+                tfb_remove_treeforge_os_nodes();
+            }
+
+            return 0;
+        }
+
+        /*
+         * Only the optional treeforge_os entry is allowed to
+         * disappear.
+         */
+        if (
+            partition
+            != TFB_MUTABLE_OS_PARTITION
+        ) {
+            return -1;
+        }
+
+        long result = tfb_blkpg_operation(
+            disk_fd,
+            TFB_BLKPG_DEL_PARTITION,
+            partition,
+            0,
+            0
+        );
+
+        if (result != 0) {
+            tfb_log_blkpg_failure(
+                result
+            );
+
+            return -1;
+        }
+
+        tfb_log(
+            "pixel-partitioner-blkpg=delete-sda27-ok"
+        );
+
+        tfb_remove_treeforge_os_nodes();
+
+        return 0;
+    }
+
+    int operation = (
+        exists
+        ? TFB_BLKPG_RESIZE_PARTITION
+        : TFB_BLKPG_ADD_PARTITION
+    );
+
+    long result = tfb_blkpg_operation(
+        disk_fd,
+        operation,
+        partition,
+        target->start_bytes,
+        target->length_bytes
+    );
+
+    if (result != 0) {
+        tfb_log_blkpg_failure(
+            result
+        );
+
+        return -1;
+    }
+
+    if (
+        operation
+        == TFB_BLKPG_ADD_PARTITION
+    ) {
+        tfb_log(
+            "pixel-partitioner-blkpg=add-ok"
+        );
+    } else {
+        tfb_log(
+            "pixel-partitioner-blkpg=resize-ok"
+        );
+    }
+
+    return 0;
+}
+
+
+static int tfb_reprobe_block_partitions(
+    void
+) {
+    long fd = tfb_open(
+        "/dev/block/sda",
+        O_RDONLY
+    );
+
+    if (fd < 0) {
+        return -1;
+    }
+
+    struct tfb_gpt_partition_target
+        userdata;
+
+    struct tfb_gpt_partition_target
+        alternate_os;
+
+    int result = (
+        tfb_gpt_read_partition_target(
+            fd,
+            TFB_MUTABLE_USERDATA_PARTITION,
+            &userdata
+        )
+    );
+
+    if (
+        result != 0
+        || !userdata.present
+        || !tfb_string_equal(
+            userdata.name,
+            "userdata"
+        )
+    ) {
+        tfb_close(fd);
+
+        tfb_log(
+            "pixel-partitioner-gpt=userdata-invalid"
+        );
+
+        return -1;
+    }
+
+    result = (
+        tfb_gpt_read_partition_target(
+            fd,
+            TFB_MUTABLE_OS_PARTITION,
+            &alternate_os
+        )
+    );
+
+    if (result != 0) {
+        tfb_close(fd);
+
+        tfb_log(
+            "pixel-partitioner-gpt=sda27-invalid"
+        );
+
+        return -1;
+    }
+
+    if (
+        alternate_os.present
+        && !tfb_string_equal(
+            alternate_os.name,
+            "treeforge_os"
+        )
+    ) {
+        tfb_close(fd);
+
+        tfb_log(
+            "pixel-partitioner-gpt=sda27-name-invalid"
+        );
+
+        return -1;
+    }
+
+    tfb_log(
+        "pixel-partitioner-gpt-refresh=targeted-blkpg"
+    );
+
+    if (
+        tfb_refresh_one_gpt_partition(
+            fd,
+            TFB_MUTABLE_USERDATA_PARTITION,
+            &userdata
+        )
+        != 0
+    ) {
+        tfb_close(fd);
+
+        return -1;
+    }
+
+    if (
+        tfb_refresh_one_gpt_partition(
+            fd,
+            TFB_MUTABLE_OS_PARTITION,
+            &alternate_os
+        )
+        != 0
+    ) {
+        tfb_close(fd);
+
+        return -1;
+    }
+
+    tfb_close(fd);
+
+    /*
+     * BLKPG updates the kernel table synchronously, but allow sysfs
+     * and the partition-device view to settle before realizing /dev.
+     */
+    for (
+        int attempt = 0;
+        attempt < 20;
+        attempt++
+    ) {
+        int os_exists = (
+            tfb_sysfs_partition_exists(
+                TFB_MUTABLE_OS_PARTITION
+            )
+        );
+
+        if (
+            os_exists
+            == alternate_os.present
+        ) {
+            if (
+                tfb_realize_block_nodes()
+                == 0
+            ) {
+                if (
+                    tfb_block_create_gpt_alias(
+                        TFB_MUTABLE_USERDATA_PARTITION,
+                        userdata.name
+                    )
+                    != 0
+                ) {
+                    return -1;
+                }
+
+                if (
+                    alternate_os.present
+                    && tfb_block_create_gpt_alias(
+                        TFB_MUTABLE_OS_PARTITION,
+                        alternate_os.name
+                    )
+                        != 0
+                ) {
+                    return -1;
+                }
+
+                tfb_log(
+                    "pixel-partitioner-gpt-refresh=ready"
+                );
+
+                return 0;
+            }
+        }
+
+        tfb_sleep_ms(
+            50
+        );
+    }
+
+    tfb_log(
+        "pixel-partitioner-gpt-refresh=settle-timeout"
+    );
+
+    return -1;
+}
+
+
+static void tfb_pixel_partitioner_service(
+    const struct tfb_menu_page *page,
+    int *redraw
+) {
+    if (
+        !tfb_pixel_partitioner_page(
+            page
+        )
+    ) {
+        return;
+    }
+
+    long request = tfb_open(
+        TFB_PP_REPROBE_REQUEST,
+        O_RDONLY
+    );
+
+    if (request < 0) {
+        return;
+    }
+
+    tfb_close(
+        request
+    );
+
+    tfb_pp_remove_marker(
+        TFB_PP_REPROBE_REQUEST
+    );
+
+    tfb_pp_remove_marker(
+        TFB_PP_REPROBE_READY
+    );
+
+    tfb_pp_remove_marker(
+        TFB_PP_REPROBE_FAILED
+    );
+
+    if (
+        tfb_reprobe_block_partitions()
+        == 0
+    ) {
+        tfb_pp_write_marker(
+            TFB_PP_REPROBE_READY
+        );
+
+        tfb_menu_status =
+            "PARTITION TABLE REFRESHED";
+
+        tfb_log(
+            "pixel-partitioner-reprobe=ready"
+        );
+
+    } else {
+        tfb_pp_write_marker(
+            TFB_PP_REPROBE_FAILED
+        );
+
+        tfb_menu_status =
+            "PARTITION REPROBE FAILED";
+
+        tfb_log(
+            "pixel-partitioner-reprobe=failed"
+        );
+    }
+
+    if (redraw) {
+        *redraw |=
+            TFB_REDRAW_STATUS;
+    }
+}
+
+
 static void tfb_menu_activate_selected(
     const struct tfb_menu_page **page,
     const struct tfb_menu_page **page_stack,
@@ -7181,6 +9655,24 @@ static void tfb_menu_activate_selected(
             return;
         }
 
+        /*
+         * TFB_PIXEL_PARTITIONER_MENU_SCOPE_V1
+         */
+        if (
+            tfb_pixel_partitioner_page(
+                entry->submenu
+            )
+            && !tfb_pixel_partitioner_activate()
+        ) {
+            tfb_menu_status =
+                "PIXEL PARTITIONER UNAVAILABLE";
+
+            *redraw |=
+                TFB_REDRAW_STATUS;
+
+            return;
+        }
+
         page_stack[
             *stack_depth
         ] = entry->submenu;
@@ -7196,7 +9688,14 @@ static void tfb_menu_activate_selected(
             )
         );
 
-        tfb_menu_status = 0;
+        tfb_menu_status = (
+            tfb_pixel_partitioner_page(
+                *page
+            )
+            ? "PIXEL PARTITIONER READY"
+            : 0
+        );
+
         *elapsed_ms = 0;
         *timeout_fired = 0;
 
@@ -7217,6 +9716,14 @@ static void tfb_menu_activate_selected(
         if (
             *stack_depth > 1
         ) {
+            if (
+                tfb_pixel_partitioner_page(
+                    *page
+                )
+            ) {
+                tfb_pixel_partitioner_deactivate();
+            }
+
             (*stack_depth)--;
 
             *page = (
@@ -7258,11 +9765,20 @@ static void tfb_menu_activate_selected(
     );
 
     /*
-     * Implemented transition actions never return.  A returning action
-     * therefore changed only tfb_menu_status.
+     * Transition actions never return.  Live Console does return, but
+     * it owns the full framebuffer while active and therefore requires
+     * a complete menu repaint.
      */
-    *redraw |=
-        TFB_REDRAW_STATUS;
+    if (
+        entry->action
+        == TFB_ACTION_LIVE_CONSOLE
+    ) {
+        *redraw |=
+            TFB_REDRAW_FULL;
+    } else {
+        *redraw |=
+            TFB_REDRAW_STATUS;
+    }
 }
 
 
@@ -7760,6 +10276,11 @@ static void tfb_run_menu(void) {
             }
         }
 
+        tfb_pixel_partitioner_service(
+            page,
+            &redraw
+        );
+
         int adb_connected =
             tfb_adb_connected();
 
@@ -8159,6 +10680,15 @@ void _start(void) {
 
             MenuAction.REBOOT_RECOVERY:
                 "TFB_ACTION_REBOOT_RECOVERY",
+
+            MenuAction.SET_BOOT_TARGET_SLOT_A:
+                "TFB_ACTION_SET_BOOT_TARGET_SLOT_A",
+
+            MenuAction.SET_BOOT_TARGET_SLOT_B:
+                "TFB_ACTION_SET_BOOT_TARGET_SLOT_B",
+
+            MenuAction.LIVE_CONSOLE:
+                "TFB_ACTION_LIVE_CONSOLE",
 
             MenuAction.BACK:
                 "TFB_ACTION_BACK",

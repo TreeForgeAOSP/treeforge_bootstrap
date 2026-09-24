@@ -740,6 +740,24 @@ static int tfb_path_exists(
 }
 
 
+/*
+ * TFB_ADB_CHILD_LIVENESS_V19
+ *
+ * wait4(..., WNOHANG) has three materially different outcomes:
+ *
+ *   0       child is still running
+ *   pid     child exited and was reaped
+ *   < 0     wait itself failed
+ *
+ * V18 treated every non-zero return as child death.  A transient
+ * wait4 error could therefore tear down the complete USB gadget even
+ * though adbd was still alive.
+ *
+ * For a negative wait result, probe the PID with kill(pid, 0).
+ * ESRCH (-3 from the raw syscall ABI) means the process is gone.
+ * Any other result is non-destructive: preserve the running gadget
+ * and allow the next supervisor iteration to reassess it.
+ */
 static int tfb_child_alive(
     long pid
 ) {
@@ -759,10 +777,64 @@ static int tfb_child_alive(
         0
     );
 
+    if (rc == 0) {
+        return 1;
+    }
+
+    if (rc == pid) {
+        return 0;
+    }
+
+    persistent_rc(
+        "TFB_ADB_CHILD_WAIT4_UNEXPECTED rc=",
+        rc
+    );
+
+    if (rc < 0) {
+        long probe = sys6(
+            SYS_KILL,
+            pid,
+            0,
+            0,
+            0,
+            0,
+            0
+        );
+
+        persistent_rc(
+            "TFB_ADB_CHILD_PID_PROBE rc=",
+            probe
+        );
+
+        /*
+         * Raw Linux syscall ABI:
+         *
+         *   -ESRCH == -3
+         *
+         * Only proven process absence is allowed to initiate the
+         * destructive runtime-loss recovery path.
+         */
+        if (probe == -3) {
+            return 0;
+        }
+
+        persistent_line(
+            "TFB_ADB_CHILD_WAIT_ERROR_ASSUME_ALIVE"
+        );
+
+        return 1;
+    }
+
     /*
-     * WNOHANG returns zero while the child is alive.
+     * wait4(pid, ...) should never return another positive PID.
+     * Fail closed with respect to the child, while preserving a
+     * marker explaining the anomalous result.
      */
-    return rc == 0;
+    persistent_line(
+        "TFB_ADB_CHILD_WAIT4_UNEXPECTED_POSITIVE"
+    );
+
+    return 0;
 }
 
 
@@ -1087,49 +1159,35 @@ static void tfb_adb_teardown(
 
 
     /*
-     * TREEFORGE_ANDROID_FULL_GADGET_CLEANUP_V3
+     * TREEFORGE_ANDROID_GADGET_ROOT_PRESERVE_V4
      *
-     * The TreeForge menu owns the complete g1 instance it creates.
-     * Once its FunctionFS function has been detached, remove the
-     * remaining TreeForge-created configfs hierarchy in reverse order.
+     * Same-kernel Android handoff must preserve the configfs g1 gadget
+     * object itself.
      *
-     * Android GS201 early-boot recreates g1 and its complete function
-     * population itself.  Do not carry TreeForge's partial gadget tree
-     * across the second-stage Android ownership boundary.
+     * Android's USB configfs implementation keeps a kernel-global
+     * android_device pointer associated with the first gadget object.
+     * Destroying g1 leaves that pointer referring to the destroyed
+     * device.  Android can then recreate the configfs directory while
+     * create_function_device() still uses the stale parent device when
+     * creating MIDI/audio-source function devices.
+     *
+     * TreeForge therefore releases only the state it actively owns:
+     *
+     *   - UDC binding
+     *   - configuration symlink
+     *   - TreeForge adbd
+     *   - TreeForge FunctionFS mount
+     *   - functions/ffs.adb
+     *
+     * Those releases happen above.
+     *
+     * Keep g1 plus its default configfs groups alive so Android adopts
+     * the existing gadget object and repopulates it instead of
+     * destroying and recreating the kernel-side gadget parent.
      */
-    static const char *cleanup_directories[] = {
-        "/config/usb_gadget/g1/configs/b.1/strings/0x409",
-        "/config/usb_gadget/g1/configs/b.1/strings",
-        "/config/usb_gadget/g1/configs/b.1",
-        "/config/usb_gadget/g1/configs",
-        "/config/usb_gadget/g1/strings/0x409",
-        "/config/usb_gadget/g1/strings",
-        "/config/usb_gadget/g1/functions",
-        "/config/usb_gadget/g1",
-        0
-    };
-
-    for (
-        int cleanup_index = 0;
-        cleanup_directories[cleanup_index];
-        ++cleanup_index
-    ) {
-        long cleanup_rc = sys6(
-            SYS_UNLINKAT,
-            AT_FDCWD,
-            (long)
-                cleanup_directories[cleanup_index],
-            0x200, /* AT_REMOVEDIR */
-            0,
-            0,
-            0
-        );
-
-        persistent_rc(
-            "TFB_ADB_GADGET_RMDIR rc=",
-            cleanup_rc
-        );
-    }
+    persistent_line(
+        "TFB_ADB_GADGET_ROOT_PRESERVED"
+    );
 
     persistent_line(
         "TFB_ADB_TEARDOWN_END"
@@ -1833,7 +1891,7 @@ static long tfb_rescue_pid = -1;
 
 
 /*
- * TFB_ADB_USB_RECONNECT_V17_1B
+ * TFB_ADB_STEADY_STATE_PROCESS_LIVENESS_V18
  *
  * adbd may remain alive after the physical USB cable is removed.
  * Supervising only the child PID therefore cannot detect a dead USB
@@ -1962,29 +2020,6 @@ static int tfb_read_small_text(
 }
 
 
-static int tfb_udc_explicitly_detached(
-    void
-) {
-    char state[32];
-
-    if (
-        !tfb_read_small_text(
-            "/sys/class/udc/"
-            "11210000.dwc3/state",
-            state,
-            sizeof(state)
-        )
-    ) {
-        return 0;
-    }
-
-    return tfb_text_equal(
-        state,
-        "not attached"
-    );
-}
-
-
 static void tfb_supervise_adb_service(
     int adb_ready
 ) {
@@ -1994,12 +2029,6 @@ static void tfb_supervise_adb_service(
     };
 
     int retry_ticks = 0;
-
-    /*
-     * 8 x 25 ms prevents a short UDC transition from being mistaken
-     * for a physical cable removal.
-     */
-    int detached_ticks = 0;
 
     persistent_line(
         "TFB_ADB_SERVICE_SUPERVISOR_BEGIN"
@@ -2047,35 +2076,6 @@ static void tfb_supervise_adb_service(
 
             adb_ready = 0;
             retry_ticks = 0;
-            detached_ticks = 0;
-        }
-
-        if (
-            adb_ready
-            && tfb_udc_explicitly_detached()
-        ) {
-            detached_ticks++;
-
-            if (
-                detached_ticks >= 8
-            ) {
-                persistent_line(
-                    "TFB_ADB_USB_SESSION_LOST"
-                );
-
-                /*
-                 * Reuse the complete deterministic gadget teardown.
-                 * The existing retry path will recreate FunctionFS,
-                 * restart adbd, relink ffs.adb and rebind the UDC.
-                 */
-                tfb_adb_teardown();
-
-                adb_ready = 0;
-                retry_ticks = 0;
-                detached_ticks = 0;
-            }
-        } else {
-            detached_ticks = 0;
         }
 
         if (!adb_ready) {

@@ -53,7 +53,7 @@
               "submenu": {
                 "id": "pixel-partitioner-menu",
                 "title": "Pixel Partitioner",
-                "subtitle": "Reserved for future Pixel Partitioner integration",
+                "subtitle": "Connect the Pixel Partitioner CLI",
                 "default_entry": "pixel-partitioner-back",
                 "timeout_ms": 0,
                 "entries": [
@@ -66,8 +66,51 @@
                   }
                 ]
               },
-              "description": "Partition and storage management - future integration",
+              "description": "Open the host-controlled partitioning service",
               "icon": "pixel-partitioner"
+            },
+            {
+              "id": "boot-target",
+              "label": "Change Boot Target",
+              "description": "Choose the Android slot owned by Bootstrap",
+              "icon": "android",
+              "submenu": {
+                "id": "boot-target-menu",
+                "title": "Boot Target",
+                "subtitle": "Owned by TreeForge Bootstrap",
+                "default_entry": "target-a",
+                "timeout_ms": 0,
+                "entries": [
+                  {
+                    "id": "target-a",
+                    "label": "Target Slot A",
+                    "action": "set_boot_target_slot_a",
+                    "description": "Select Android Slot A",
+                    "icon": "android"
+                  },
+                  {
+                    "id": "target-b",
+                    "label": "Target Slot B",
+                    "action": "set_boot_target_slot_b",
+                    "description": "Select Android Slot B",
+                    "icon": "android"
+                  },
+                  {
+                    "id": "boot-target-back",
+                    "label": "Back",
+                    "action": "back",
+                    "description": "Return to Maintenance",
+                    "icon": "back"
+                  }
+                ]
+              }
+            },
+            {
+              "id": "maintenance-live-console",
+              "label": "Live Console",
+              "action": "live_console",
+              "description": "View live kernel and TreeForge diagnostics",
+              "icon": "maintenance"
             },
             {
               "id": "maintenance-bootloader",

@@ -29,6 +29,9 @@ class MenuAction(str, Enum):
     TOGGLE_ROOT_PERSISTENCE = "toggle_root_persistence"
     REBOOT_BOOTLOADER = "reboot_bootloader"
     REBOOT_RECOVERY = "reboot_recovery"
+    SET_BOOT_TARGET_SLOT_A = "set_boot_target_slot_a"
+    SET_BOOT_TARGET_SLOT_B = "set_boot_target_slot_b"
+    LIVE_CONSOLE = "live_console"
     BACK = "back"
 
 
