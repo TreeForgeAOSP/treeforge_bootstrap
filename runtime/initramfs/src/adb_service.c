@@ -723,6 +723,53 @@ static int tfb_write_file(
 static long tfb_adbd_pid = -1;
 
 
+/*
+ * TFB_ADB_MANUAL_RESET_V1
+ */
+#define TFB_ADB_RESET_REQUEST \
+    "/dev/treeforge-bootstrap-adb-reset"
+
+#define TFB_ADB_RESTARTING \
+    "/dev/treeforge-bootstrap-adb-restarting"
+
+#define TFB_ADB_ERROR_B_SESSION_MARKER \
+    "/dev/treeforge-bootstrap-adb-error-b-session"
+
+#define TFB_ADB_ERROR_UDC_MARKER \
+    "/dev/treeforge-bootstrap-adb-error-udc"
+
+#define TFB_ADB_ERROR_CONFIGFS_MARKER \
+    "/dev/treeforge-bootstrap-adb-error-configfs"
+
+#define TFB_ADB_ERROR_FFS_MARKER \
+    "/dev/treeforge-bootstrap-adb-error-ffs"
+
+#define TFB_ADB_ERROR_ADBD_MARKER \
+    "/dev/treeforge-bootstrap-adb-error-adbd"
+
+#define TFB_ADB_ERROR_LINK_MARKER \
+    "/dev/treeforge-bootstrap-adb-error-link"
+
+#define TFB_ADB_ERROR_BIND_MARKER \
+    "/dev/treeforge-bootstrap-adb-error-bind"
+
+#define TFB_ADB_ERROR_UNKNOWN_MARKER \
+    "/dev/treeforge-bootstrap-adb-error-unknown"
+
+#define TFB_ADB_ERR_NONE 0
+#define TFB_ADB_ERR_B_SESSION 1
+#define TFB_ADB_ERR_UDC 2
+#define TFB_ADB_ERR_CONFIGFS 3
+#define TFB_ADB_ERR_FFS 4
+#define TFB_ADB_ERR_ADBD 5
+#define TFB_ADB_ERR_LINK 6
+#define TFB_ADB_ERR_BIND 7
+#define TFB_ADB_ERR_UNKNOWN 8
+
+static int tfb_adb_last_error =
+    TFB_ADB_ERR_NONE;
+
+
 static int tfb_path_exists(
     const char *path
 ) {
@@ -1580,6 +1627,9 @@ static int tfb_enable_gs201_usb_device_session(
 static int tfb_setup_adb_usb(
     void
 ) {
+    tfb_adb_last_error =
+        TFB_ADB_ERR_UNKNOWN;
+
     persistent_line(
         "TFB_ADB_BEGIN"
     );
@@ -1609,6 +1659,9 @@ static int tfb_setup_adb_usb(
     if (
         !tfb_enable_gs201_usb_device_session()
     ) {
+        tfb_adb_last_error =
+            TFB_ADB_ERR_B_SESSION;
+
         persistent_line(
             "TFB_V6C_ADB_B_SESS_FAILED"
         );
@@ -1621,6 +1674,9 @@ static int tfb_setup_adb_usb(
     );
 
     if (!tfb_wait_tangorpro_udc()) {
+        tfb_adb_last_error =
+            TFB_ADB_ERR_UDC;
+
         persistent_line(
             "TFB_V6C_ADB_UDC_WAIT_FAILED"
         );
@@ -1643,6 +1699,9 @@ static int tfb_setup_adb_usb(
             "configfs"
         )
     ) {
+        tfb_adb_last_error =
+            TFB_ADB_ERR_CONFIGFS;
+
         persistent_line(
             "TFB_ADB_CONFIGFS_FAILED"
         );
@@ -1671,6 +1730,9 @@ static int tfb_setup_adb_usb(
                 0755
             )
         ) {
+            tfb_adb_last_error =
+                TFB_ADB_ERR_CONFIGFS;
+
             persistent_line(
                 "TFB_ADB_CONFIGFS_MKDIR_FAILED"
             );
@@ -1711,6 +1773,9 @@ static int tfb_setup_adb_usb(
             "ADB"
         )
     ) {
+        tfb_adb_last_error =
+            TFB_ADB_ERR_CONFIGFS;
+
         persistent_line(
             "TFB_ADB_IDENTITY_FAILED"
         );
@@ -1735,6 +1800,9 @@ static int tfb_setup_adb_usb(
             "functionfs"
         )
     ) {
+        tfb_adb_last_error =
+            TFB_ADB_ERR_FFS;
+
         persistent_line(
             "TFB_ADB_FUNCTIONFS_MOUNT_FAILED"
         );
@@ -1749,6 +1817,9 @@ static int tfb_setup_adb_usb(
     );
 
     if (tfb_start_adbd() <= 0) {
+        tfb_adb_last_error =
+            TFB_ADB_ERR_ADBD;
+
         persistent_line(
             "TFB_ADB_DAEMON_FAILED"
         );
@@ -1759,6 +1830,9 @@ static int tfb_setup_adb_usb(
     }
 
     if (!tfb_wait_functionfs_runtime()) {
+        tfb_adb_last_error =
+            TFB_ADB_ERR_FFS;
+
         tfb_adb_teardown();
 
         return 0;
@@ -1795,6 +1869,9 @@ static int tfb_setup_adb_usb(
     );
 
     if (link_rc < 0) {
+        tfb_adb_last_error =
+            TFB_ADB_ERR_LINK;
+
         persistent_rc(
             "TFB_ADB_FUNCTION_LINK rc=",
             link_rc
@@ -1810,6 +1887,9 @@ static int tfb_setup_adb_usb(
     );
 
     if (!tfb_adbd_alive()) {
+        tfb_adb_last_error =
+            TFB_ADB_ERR_ADBD;
+
         persistent_line(
             "TFB_ADB_DAEMON_DIED_BEFORE_BIND"
         );
@@ -1825,6 +1905,9 @@ static int tfb_setup_adb_usb(
             "11210000.dwc3"
         )
     ) {
+        tfb_adb_last_error =
+            TFB_ADB_ERR_BIND;
+
         persistent_line(
             "TFB_ADB_UDC_BIND_FAILED"
         );
@@ -1850,6 +1933,9 @@ static int tfb_setup_adb_usb(
     );
 
     if (!tfb_adbd_alive()) {
+        tfb_adb_last_error =
+            TFB_ADB_ERR_ADBD;
+
         persistent_line(
             "TFB_ADB_DAEMON_DIED_AFTER_BIND"
         );
@@ -1858,6 +1944,9 @@ static int tfb_setup_adb_usb(
 
         return 0;
     }
+
+    tfb_adb_last_error =
+        TFB_ADB_ERR_NONE;
 
     tfb_touch_file(
         "/dev/treeforge-bootstrap-adb-ready"
@@ -2020,6 +2109,148 @@ static int tfb_read_small_text(
 }
 
 
+static void tfb_adb_clear_error_markers(
+    void
+) {
+    static const char *paths[] = {
+        TFB_ADB_ERROR_B_SESSION_MARKER,
+        TFB_ADB_ERROR_UDC_MARKER,
+        TFB_ADB_ERROR_CONFIGFS_MARKER,
+        TFB_ADB_ERROR_FFS_MARKER,
+        TFB_ADB_ERROR_ADBD_MARKER,
+        TFB_ADB_ERROR_LINK_MARKER,
+        TFB_ADB_ERROR_BIND_MARKER,
+        TFB_ADB_ERROR_UNKNOWN_MARKER,
+        0
+    };
+
+    for (
+        int index = 0;
+        paths[index];
+        index++
+    ) {
+        tfb_remove_file(
+            paths[index]
+        );
+    }
+}
+
+
+static void tfb_adb_publish_error(
+    void
+) {
+    tfb_adb_clear_error_markers();
+
+    const char *path =
+        TFB_ADB_ERROR_UNKNOWN_MARKER;
+
+    if (
+        tfb_adb_last_error
+        == TFB_ADB_ERR_B_SESSION
+    ) {
+        path =
+            TFB_ADB_ERROR_B_SESSION_MARKER;
+    } else if (
+        tfb_adb_last_error
+        == TFB_ADB_ERR_UDC
+    ) {
+        path =
+            TFB_ADB_ERROR_UDC_MARKER;
+    } else if (
+        tfb_adb_last_error
+        == TFB_ADB_ERR_CONFIGFS
+    ) {
+        path =
+            TFB_ADB_ERROR_CONFIGFS_MARKER;
+    } else if (
+        tfb_adb_last_error
+        == TFB_ADB_ERR_FFS
+    ) {
+        path =
+            TFB_ADB_ERROR_FFS_MARKER;
+    } else if (
+        tfb_adb_last_error
+        == TFB_ADB_ERR_ADBD
+    ) {
+        path =
+            TFB_ADB_ERROR_ADBD_MARKER;
+    } else if (
+        tfb_adb_last_error
+        == TFB_ADB_ERR_LINK
+    ) {
+        path =
+            TFB_ADB_ERROR_LINK_MARKER;
+    } else if (
+        tfb_adb_last_error
+        == TFB_ADB_ERR_BIND
+    ) {
+        path =
+            TFB_ADB_ERROR_BIND_MARKER;
+    }
+
+    tfb_touch_file(
+        path
+    );
+}
+
+
+static int tfb_adb_manual_reset(
+    void
+) {
+    tfb_remove_file(
+        TFB_ADB_RESET_REQUEST
+    );
+
+    tfb_adb_clear_error_markers();
+
+    tfb_touch_file(
+        TFB_ADB_RESTARTING
+    );
+
+    persistent_line(
+        "TFB_ADB_SERVICE_MANUAL_RESET_BEGIN"
+    );
+
+    for (
+        int attempt = 1;
+        attempt <= 2;
+        attempt++
+    ) {
+        persistent_rc(
+            "TFB_ADB_SERVICE_MANUAL_RESET_ATTEMPT value=",
+            attempt
+        );
+
+        if (tfb_setup_adb_usb()) {
+            tfb_remove_file(
+                TFB_ADB_RESTARTING
+            );
+
+            tfb_adb_clear_error_markers();
+
+            persistent_line(
+                "TFB_ADB_SERVICE_MANUAL_RESET_READY"
+            );
+
+            return 1;
+        }
+    }
+
+    tfb_remove_file(
+        TFB_ADB_RESTARTING
+    );
+
+    tfb_adb_publish_error();
+
+    persistent_rc(
+        "TFB_ADB_SERVICE_MANUAL_RESET_FAILED error=",
+        tfb_adb_last_error
+    );
+
+    return 0;
+}
+
+
 static void tfb_supervise_adb_service(
     int adb_ready
 ) {
@@ -2029,6 +2260,7 @@ static void tfb_supervise_adb_service(
     };
 
     int retry_ticks = 0;
+    int manual_recovery_required = 0;
 
     persistent_line(
         "TFB_ADB_SERVICE_SUPERVISOR_BEGIN"
@@ -2065,6 +2297,27 @@ static void tfb_supervise_adb_service(
         }
 
         if (
+            tfb_path_exists(
+                TFB_ADB_RESET_REQUEST
+            )
+        ) {
+            persistent_line(
+                "TFB_ADB_SERVICE_MANUAL_RESET_REQUEST"
+            );
+
+            adb_ready =
+                tfb_adb_manual_reset();
+
+            manual_recovery_required = (
+                adb_ready
+                ? 0
+                : 1
+            );
+
+            retry_ticks = 0;
+        }
+
+        if (
             adb_ready
             && !tfb_adbd_alive()
         ) {
@@ -2072,13 +2325,26 @@ static void tfb_supervise_adb_service(
                 "TFB_ADB_SERVICE_RUNTIME_LOST"
             );
 
-            tfb_adb_teardown();
+            /*
+             * Menu-owned mode retains the explicit recovery contract.
+             *
+             * If adbd dies, clear the ready marker and require the
+             * Maintenance ADB reset action. Do not silently rebuild
+             * the USB gadget behind the menu.
+             */
+            tfb_remove_file(
+                "/dev/treeforge-bootstrap-adb-ready"
+            );
 
             adb_ready = 0;
+            manual_recovery_required = 1;
             retry_ticks = 0;
         }
 
-        if (!adb_ready) {
+        if (
+            !adb_ready
+            && !manual_recovery_required
+        ) {
             ++retry_ticks;
 
             /*

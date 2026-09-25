@@ -28,6 +28,14 @@ from .image import (
     verify_image,
 )
 
+from .avb_graph import (
+    realize_family,
+)
+
+from .avb_keyset import (
+    load_avb_keyset,
+)
+
 from .hardware import hardware_preflight
 from .interactive import interactive
 
@@ -119,7 +127,7 @@ def doctor() -> None:
 
     if (
         _sha256(adbd)
-        != "46ab32860fc78a7556c47b71e8f4a2089f43492fd78bc30727f94a3b466e4109"
+        != "625fbc447f0f1f9490aa0b72f88dd34f0f7e84c93fe80484288336acda28d53a"
     ):
         raise TreeForgeBootstrapBuildError(
             "treeforge-bootstrap-adbd "
@@ -179,7 +187,56 @@ def main() -> None:
             "verify-provider",
             "image",
             "verify-image",
+            "realize-family",
             "hardware-preflight",
+        ),
+    )
+
+    parser.add_argument(
+        "--input-family",
+        type=Path,
+        help=(
+            "Complete Pixel Partitioner "
+            "device-backup family consumed "
+            "by realize-family."
+        ),
+    )
+
+    parser.add_argument(
+        "--output-family",
+        type=Path,
+        help=(
+            "Optional explicit output directory "
+            "for realize-family."
+        ),
+    )
+
+    parser.add_argument(
+        "--avb-key",
+        type=Path,
+        help=(
+            "Explicit RSA private key for the "
+            "realized boot/init_boot AVB identity."
+        ),
+    )
+
+    parser.add_argument(
+        "--parent-vbmeta-key",
+        type=Path,
+        help=(
+            "Private key matching the existing "
+            "root vbmeta identity, used only when "
+            "boot/init_boot trust must be rewritten."
+        ),
+    )
+
+    parser.add_argument(
+        "--avb-keyset",
+        type=Path,
+        help=(
+            "Manifest-backed AVB keyset "
+            "directory or keyset.json used "
+            "by realize-family."
         ),
     )
 
@@ -203,6 +260,98 @@ def main() -> None:
         build_image()
     elif args.command == "verify-image":
         verify_image()
+    elif args.command == "realize-family":
+        if args.input_family is None:
+            parser.error(
+                "realize-family requires "
+                "--input-family PATH"
+            )
+
+        if (
+            args.avb_keyset is not None
+            and (
+                args.avb_key is not None
+                or args.parent_vbmeta_key
+                is not None
+            )
+        ):
+            parser.error(
+                "--avb-keyset is mutually "
+                "exclusive with --avb-key and "
+                "--parent-vbmeta-key"
+            )
+
+        keyset = None
+
+        resolved_avb_key = (
+            args.avb_key
+        )
+
+        resolved_parent_key = (
+            args.parent_vbmeta_key
+        )
+
+        if args.avb_keyset is not None:
+            keyset = load_avb_keyset(
+                args.avb_keyset
+            )
+
+            resolved_avb_key = (
+                keyset
+                .boot_chain_private_key
+            )
+
+            resolved_parent_key = (
+                keyset
+                .root_vbmeta_private_key
+            )
+
+            print(
+                "AVB_KEYSET_ID="
+                + keyset.keyset_id
+            )
+
+            print(
+                "AVB_KEYSET_MANIFEST_SHA256="
+                + keyset.manifest_sha256
+            )
+
+            print(
+                "AVB_KEYSET_BOOT_CHAIN_PUBLIC_KEY_SHA1="
+                + keyset.boot_chain_public_key_sha1
+            )
+
+            print(
+                "AVB_KEYSET_ROOT_PUBLIC_KEY_SHA1="
+                + keyset.root_vbmeta_public_key_sha1
+            )
+
+            print(
+                "AVB_KEYSET_VERIFY=PASS"
+            )
+
+        realize_family(
+            args.input_family,
+            output_family=(
+                args.output_family
+            ),
+            avb_key=(
+                resolved_avb_key
+            ),
+            parent_vbmeta_key=(
+                resolved_parent_key
+            ),
+            keyset_id=(
+                keyset.keyset_id
+                if keyset is not None
+                else None
+            ),
+            keyset_manifest_sha256=(
+                keyset.manifest_sha256
+                if keyset is not None
+                else None
+            ),
+        )
     else:
         hardware_preflight()
 

@@ -32,6 +32,8 @@ class MenuAction(str, Enum):
     SET_BOOT_TARGET_SLOT_A = "set_boot_target_slot_a"
     SET_BOOT_TARGET_SLOT_B = "set_boot_target_slot_b"
     LIVE_CONSOLE = "live_console"
+    RESTART_ADB_USB = "restart_adb_usb"
+    NOT_IMPLEMENTED = "not_implemented"
     BACK = "back"
 
 

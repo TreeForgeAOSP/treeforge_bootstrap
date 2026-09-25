@@ -2,227 +2,264 @@
   "schema": 1,
   "profile_id": "treeforge-default",
   "root": {
-    "id": "main",
-    "title": "TreeForge Boot Manager",
-    "subtitle": "Select Boot Option",
-    "default_entry": "android-a",
-    "timeout_ms": 0,
+    "id": "home",
+    "title": "Home",
+    "subtitle": "Resume, device management, reboot and maintenance",
+    "default_entry": "resume",
+    "timeout_ms": 10000,
+    "timeout_action": "boot_android_slot_a",
     "entries": [
       {
-        "id": "android-a",
-        "label": "Boot Android (Slot A)",
-        "action": "boot_android_slot_a",
-        "description": "Start the installed Android system",
-        "icon": "android"
+        "id": "resume",
+        "label": "Resume",
+        "description": "Working: Android A",
+        "icon": "none",
+        "action": "boot_android_slot_a"
       },
       {
-        "id": "recovery",
-        "label": "Boot Recovery",
+        "id": "boot-options",
+        "label": "Boot Options",
+        "description": "Choose Android and future boot targets",
+        "icon": "none",
         "submenu": {
-          "id": "recovery-menu",
-          "title": "Recovery",
-          "subtitle": "Recovery is not implemented yet",
-          "default_entry": "recovery-back",
+          "id": "boot-options-page",
+          "title": "Boot Options",
+          "subtitle": "Explicit operating-system and runtime targets",
+          "default_entry": "boot-android-a",
           "timeout_ms": 0,
           "entries": [
             {
-              "id": "recovery-back",
+              "id": "boot-android-a",
+              "label": "Android A",
+              "description": "Working: boot Android A",
+              "icon": "none",
+              "action": "boot_android_slot_a"
+            },
+            {
+              "id": "boot-android-b",
+              "label": "Android B",
+              "description": "Not implemented: Slot B handoff is pending",
+              "icon": "none",
+              "action": "not_implemented"
+            },
+            {
+              "id": "boot-alternate",
+              "label": "Alternate OS",
+              "description": "Not implemented: alternate OS inventory/handoff pending",
+              "icon": "none",
+              "action": "not_implemented"
+            },
+            {
+              "id": "boot-recovery",
+              "label": "Recovery",
+              "description": "Not implemented: dedicated recovery runtime pending",
+              "icon": "none",
+              "action": "not_implemented"
+            },
+            {
+              "id": "boot-root",
+              "label": "Root",
+              "description": "Not implemented: rooted boot path pending",
+              "icon": "none",
+              "action": "not_implemented"
+            },
+            {
+              "id": "boot-options-back",
               "label": "Back",
-              "action": "back",
-              "description": "Return to the main boot menu",
-              "icon": "back"
+              "description": "Return to Home",
+              "icon": "none",
+              "action": "back"
             }
           ]
-        },
-        "description": "Recovery is not implemented yet",
-        "icon": "recovery"
+        }
+      },
+      {
+        "id": "pixel-partitioner",
+        "label": "Pixel Partitioner",
+        "description": "Working: device maintenance interface",
+        "icon": "none",
+        "submenu": {
+          "id": "pixel-partitioner-page",
+          "title": "Pixel Partitioner",
+          "subtitle": "Host-managed storage and partition controls",
+          "default_entry": "pp-slot-a",
+          "timeout_ms": 0,
+          "entries": [
+            {
+              "id": "pp-slot-a",
+              "label": "Target Slot A",
+              "description": "Working: select Slot A as the host boot target",
+              "icon": "none",
+              "action": "set_boot_target_slot_a"
+            },
+            {
+              "id": "pp-slot-b",
+              "label": "Target Slot B",
+              "description": "Working: select Slot B as the host boot target",
+              "icon": "none",
+              "action": "set_boot_target_slot_b"
+            },
+            {
+              "id": "pixel-partitioner-back",
+              "label": "Back",
+              "description": "Return to Home",
+              "icon": "none",
+              "action": "back"
+            }
+          ]
+        }
+      },
+      {
+        "id": "reboot-menu",
+        "label": "Reboot",
+        "description": "Bootloader working; reboot and recovery pending",
+        "icon": "none",
+        "submenu": {
+          "id": "reboot-page",
+          "title": "Reboot",
+          "subtitle": "Device restart targets",
+          "default_entry": "reboot-system",
+          "timeout_ms": 0,
+          "entries": [
+            {
+              "id": "reboot-system",
+              "label": "Reboot",
+              "description": "Not implemented: normal reboot path pending",
+              "icon": "none",
+              "action": "not_implemented"
+            },
+            {
+              "id": "reboot-bootloader",
+              "label": "Bootloader",
+              "description": "Working: reboot to bootloader",
+              "icon": "none",
+              "action": "reboot_bootloader"
+            },
+            {
+              "id": "reboot-recovery",
+              "label": "Recovery",
+              "description": "Not implemented: recovery reboot path pending",
+              "icon": "none",
+              "action": "not_implemented"
+            },
+            {
+              "id": "reboot-back",
+              "label": "Back",
+              "description": "Return to Home",
+              "icon": "none",
+              "action": "back"
+            }
+          ]
+        }
       },
       {
         "id": "maintenance",
         "label": "Maintenance",
+        "description": "Logger, ADB reset and partition viewer working",
+        "icon": "none",
         "submenu": {
-          "id": "maintenance-menu",
+          "id": "maintenance-page",
           "title": "Maintenance",
-          "subtitle": "Tools and Advanced Options",
-          "default_entry": "pixel-partitioner",
+          "subtitle": "Diagnostics, ADB and storage tools",
+          "default_entry": "live-logger",
           "timeout_ms": 0,
           "entries": [
             {
-              "id": "pixel-partitioner",
-              "label": "Pixel Partitioner",
-              "submenu": {
-                "id": "pixel-partitioner-menu",
-                "title": "Pixel Partitioner",
-                "subtitle": "Connect the Pixel Partitioner CLI",
-                "default_entry": "pixel-partitioner-back",
-                "timeout_ms": 0,
-                "entries": [
-                  {
-                    "id": "pixel-partitioner-back",
-                    "label": "Back",
-                    "action": "back",
-                    "description": "Return to Maintenance",
-                    "icon": "back"
-                  }
-                ]
-              },
-              "description": "Open the host-controlled partitioning service",
-              "icon": "pixel-partitioner"
+              "id": "live-logger",
+              "label": "Live Logger",
+              "description": "Working: live kernel and runtime logger",
+              "icon": "none",
+              "action": "live_console"
             },
             {
-              "id": "boot-target",
-              "label": "Change Boot Target",
-              "description": "Choose the Android slot owned by Bootstrap",
-              "icon": "android",
+              "id": "reset-adb",
+              "label": "Reset ADB",
+              "description": "Working: restart TreeForge ADB and USB",
+              "icon": "none",
+              "action": "restart_adb_usb"
+            },
+            {
+              "id": "partition-information",
+              "label": "Partition Information",
+              "description": "Working: read-only live partition inventory",
+              "icon": "none",
               "submenu": {
-                "id": "boot-target-menu",
-                "title": "Boot Target",
-                "subtitle": "Owned by TreeForge Bootstrap",
-                "default_entry": "target-a",
+                "id": "partition-information-viewer",
+                "title": "Partition Information",
+                "subtitle": "Read-only live partition inventory",
+                "default_entry": "partition-information-back",
                 "timeout_ms": 0,
+                "timeout_action": null,
                 "entries": [
                   {
-                    "id": "target-a",
-                    "label": "Target Slot A",
-                    "action": "set_boot_target_slot_a",
-                    "description": "Select Android Slot A",
-                    "icon": "android"
-                  },
-                  {
-                    "id": "target-b",
-                    "label": "Target Slot B",
-                    "action": "set_boot_target_slot_b",
-                    "description": "Select Android Slot B",
-                    "icon": "android"
-                  },
-                  {
-                    "id": "boot-target-back",
+                    "id": "partition-information-back",
                     "label": "Back",
-                    "action": "back",
                     "description": "Return to Maintenance",
-                    "icon": "back"
+                    "icon": "none",
+                    "action": "back"
                   }
                 ]
               }
             },
             {
-              "id": "maintenance-live-console",
-              "label": "Live Console",
-              "action": "live_console",
-              "description": "View live kernel and TreeForge diagnostics",
-              "icon": "maintenance"
-            },
-            {
-              "id": "maintenance-bootloader",
-              "label": "Reboot to Bootloader",
-              "action": "reboot_bootloader",
-              "description": "Restart into bootloader fastboot",
-              "icon": "bootloader"
+              "id": "file-transfer",
+              "label": "File Transfer",
+              "description": "Not implemented: ADB push/sideload to sda27 pending",
+              "icon": "none",
+              "action": "not_implemented"
             },
             {
               "id": "maintenance-back",
               "label": "Back",
-              "action": "back",
-              "description": "Return to the main boot menu",
-              "icon": "back"
+              "description": "Return to Home",
+              "icon": "none",
+              "action": "back"
             }
           ]
-        },
-        "description": "Tools and advanced options",
-        "icon": "maintenance"
+        }
       },
       {
-        "id": "alternate-os",
-        "label": "Boot Alternate OS",
+        "id": "future-features",
+        "label": "Future Features",
+        "description": "Not implemented: planned boot manager features",
+        "icon": "none",
         "submenu": {
-          "id": "alternate-os-menu",
-          "title": "Alternate OS",
-          "subtitle": "Alternate Operating System",
-          "default_entry": "alternate-os-back",
+          "id": "future-features-page",
+          "title": "Future Features",
+          "subtitle": "Reserved TreeForge capabilities",
+          "default_entry": "future-alternate",
           "timeout_ms": 0,
           "entries": [
             {
-              "id": "alternate-os-boot",
-              "label": "Boot Alternate OS",
-              "action": "boot_alternate_os",
-              "visible_if": "alternate_os_configured",
-              "label_state": "alternate_os_name",
-              "description": "Start the configured alternate operating system",
-              "icon": "alternate-os"
+              "id": "future-alternate",
+              "label": "Alternate OS",
+              "description": "Not implemented: installer, inventory and handoff pending",
+              "icon": "none",
+              "action": "not_implemented"
             },
             {
-              "id": "alternate-os-back",
+              "id": "future-recovery",
+              "label": "Recovery",
+              "description": "Not implemented: TreeForge recovery runtime pending",
+              "icon": "none",
+              "action": "not_implemented"
+            },
+            {
+              "id": "future-root",
+              "label": "Root",
+              "description": "Not implemented: root install and rooted boot pending",
+              "icon": "none",
+              "action": "not_implemented"
+            },
+            {
+              "id": "future-back",
               "label": "Back",
-              "action": "back",
-              "description": "Return to the main boot menu",
-              "icon": "back"
+              "description": "Return to Home",
+              "icon": "none",
+              "action": "back"
             }
           ]
-        },
-        "description": "No alternate OS installed",
-        "icon": "alternate-os"
-      },
-      {
-        "id": "root-menu",
-        "label": "Root Menu",
-        "submenu": {
-          "id": "android-root-menu",
-          "title": "Root Menu",
-          "subtitle": "Manage Root Installation",
-          "default_entry": "root-boot-android",
-          "timeout_ms": 0,
-          "entries": [
-            {
-              "id": "root-boot-android",
-              "label": "Boot Android (Slot A)",
-              "action": "boot_android_slot_a",
-              "description": "Start Android without root changes",
-              "icon": "android"
-            },
-            {
-              "id": "boot-rooted-android",
-              "label": "Boot Rooted Android",
-              "action": "boot_rooted_android",
-              "visible_if": "root_installed",
-              "description": "Start Android with the installed root environment",
-              "icon": "root"
-            },
-            {
-              "id": "install-root",
-              "label": "Install Root",
-              "action": "install_root",
-              "visible_if": "root_not_installed",
-              "description": "Install the configured root environment",
-              "icon": "root"
-            },
-            {
-              "id": "uninstall-root",
-              "label": "Uninstall Root",
-              "action": "uninstall_root",
-              "visible_if": "root_installed",
-              "description": "Remove the installed root environment",
-              "icon": "root"
-            },
-            {
-              "id": "root-persistence",
-              "label": "Root Persistence",
-              "action": "toggle_root_persistence",
-              "visible_if": "root_installed",
-              "label_state": "root_persistence",
-              "description": "Manage root persistence across Android updates",
-              "icon": "root"
-            },
-            {
-              "id": "root-back",
-              "label": "Back",
-              "action": "back",
-              "description": "Return to the main boot menu",
-              "icon": "back"
-            }
-          ]
-        },
-        "description": "Manage root installation",
-        "icon": "root"
+        }
       }
     ]
   }

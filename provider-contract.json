@@ -14,18 +14,10 @@
     "treeforge-bootstrap-adbd": {
       "architecture": "arm64",
       "repository": "TreeForgeAOSP/treeforge_toolchain",
-      "release": "treeforge-bootstrap-adbd/android-15.0.0_r36-1",
+      "release": "treeforge-bootstrap-adbd/android-15.0.0_r36-2",
       "asset": "treeforge-bootstrap-adbd-android-15.0.0_r36-arm64.tar.xz",
-      "archive_sha256": "54d8df50b5982ba6b7e20150c73e10eb71f2f0627c19c3b761b2c6058cbf4aa9",
-      "runtime_sha256": "46ab32860fc78a7556c47b71e8f4a2089f43492fd78bc30727f94a3b466e4109"
-    },
-    "kexec-tools": {
-      "architecture": "arm64",
-      "repository": "TreeForgeAOSP/treeforge_toolchain",
-      "release": "kexec-tools/android-15.0.0_r36-1",
-      "asset": "kexec-tools-android-15.0.0_r36-linux-arm64.tar.xz",
-      "archive_sha256": "8c57853496f9a54b328840d694cbb33f5ddc7909ff34bd2e2d524d2ab37dec7d",
-      "runtime_sha256": "a25f447a29273b68bc1a4ee119a277b951ece8fbab4b0e90822ad3ee3c304a6d"
+      "archive_sha256": "c0b49abe9dffa484326e1611f3422dc8d7a500bbdd03c78a7e078b72300cace5",
+      "runtime_sha256": "625fbc447f0f1f9490aa0b72f88dd34f0f7e84c93fe80484288336acda28d53a"
     }
   },
   "repository": "TreeForgeAOSP/treeforge_bootstrap",

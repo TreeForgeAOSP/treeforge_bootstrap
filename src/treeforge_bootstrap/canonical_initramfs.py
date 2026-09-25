@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import lzma
 import os
 
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ from .dispatcher import (
 from .newc import (
     NewcArchive,
     build_newc,
+    parse_newc_archive,
     read_newc_archive,
     write_newc_archive,
 )
@@ -460,129 +462,6 @@ def _runtime_bundle(
     )
 
 
-def _payload_entries(
-    stage: Path,
-    *,
-    first_inode: int,
-):
-    work = (
-        WORK
-        / "canonical-initramfs"
-    )
-
-    work.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    payload_cpio = (
-        work
-        / "payload.cpio"
-    )
-
-    build_newc(
-        stage,
-        payload_cpio,
-    )
-
-    payload = read_newc_archive(
-        payload_cpio
-    )
-
-    wanted_files = {
-        "treeforge-bootstrap-adb-service",
-        "etc/treeforge-bootstrap-release",
-    }
-
-    system = stage / "system"
-
-    for source in sorted(
-        system.rglob("*")
-    ):
-        if (
-            source.is_file()
-            or source.is_symlink()
-        ):
-            wanted_files.add(
-                source.relative_to(
-                    stage
-                ).as_posix()
-            )
-
-    wanted = set(
-        wanted_files
-    )
-
-    for name in tuple(
-        wanted_files
-    ):
-        pure = PurePosixPath(
-            name
-        )
-
-        for parent in pure.parents:
-            value = parent.as_posix()
-
-            if value == ".":
-                continue
-
-            wanted.add(
-                value
-            )
-
-    selected = []
-
-    for entry in payload.entries:
-        name = entry.name.lstrip("/")
-
-        if name not in wanted:
-            continue
-
-        new_name = (
-            RETAINED_SOURCE_ROOT
-            + "/"
-            + name
-        )
-
-        selected.append(
-            replace(
-                entry,
-                name=new_name,
-                ino=(
-                    first_inode
-                    + len(selected)
-                ),
-            )
-        )
-
-    realized_files = {
-        entry.name[
-            len(RETAINED_SOURCE_ROOT) + 1:
-        ]
-        for entry in selected
-        if (
-            entry.name[
-                len(RETAINED_SOURCE_ROOT) + 1:
-            ]
-            in wanted_files
-        )
-    }
-
-    if realized_files != wanted_files:
-        missing = sorted(
-            wanted_files
-            - realized_files
-        )
-
-        raise CanonicalInitramfsError(
-            "payload CPIO did not contain required "
-            "retained sources: "
-            + ", ".join(missing)
-        )
-
-    return tuple(selected)
-
-
 def compose_canonical_initramfs(
     *,
     stage: Path,
@@ -672,13 +551,11 @@ def compose_canonical_initramfs(
         data=first_stage_init,
     )
 
-    # Retained TreeForge Bootstrap runtime files are now carried inside
-    # the dispatcher ELF itself and survive first-stage teardown
-    # through the already-proven FD99 transition descriptor.
+    # Retained TreeForge Bootstrap runtime files remain carried inside
+    # the dispatcher ELF through the proven FD99 bundle.
     #
-    # Do not duplicate those files as CPIO entries.
-    payload_entries = ()
-
+    # Only the patched first-stage interception helper remains an
+    # ordinary CPIO addition.
     additions = (
         first_stage_entry,
     )
@@ -993,6 +870,7 @@ def validate_canonical_initramfs(
     bundle_end = len(embedded) - 16
 
     destinations = set()
+    runtime_payloads = {}
 
     for index in range(file_count):
         if cursor + 16 > bundle_end:
@@ -1094,6 +972,10 @@ def validate_canonical_initramfs(
             cursor:
             cursor + payload_length
         ]
+
+        runtime_payloads[
+            destination
+        ] = payload
 
         if mode == 0:
             if (

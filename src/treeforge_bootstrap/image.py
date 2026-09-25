@@ -228,7 +228,23 @@ def _run(
     return result.stdout
 
 
-def _validate_inputs() -> None:
+def _validate_inputs(
+    *,
+    source_init_boot: Path | None = None,
+    source_vbmeta: Path | None = None,
+) -> None:
+    resolved_source_init_boot = (
+        SOURCE_INIT_BOOT
+        if source_init_boot is None
+        else source_init_boot
+    )
+
+    resolved_source_vbmeta = (
+        SOURCE_VBMETA
+        if source_vbmeta is None
+        else source_vbmeta
+    )
+
     verify_runtime()
 
     if not RUNTIME_RAMDISK.is_file():
@@ -237,19 +253,20 @@ def _validate_inputs() -> None:
             f"{RUNTIME_RAMDISK}"
         )
 
-    if not SOURCE_INIT_BOOT.is_file():
+    if not resolved_source_init_boot.is_file():
         raise TreeForgeBootstrapImageError(
             "locked AOSP tangorpro init_boot "
             "missing: "
-            f"{SOURCE_INIT_BOOT}"
+            f"{resolved_source_init_boot}"
         )
 
     source_sha = _sha256(
-        SOURCE_INIT_BOOT
+        resolved_source_init_boot
     )
 
     if (
-        source_sha
+        source_init_boot is None
+        and source_sha
         != EXPECTED_SOURCE_SHA256
     ):
         raise TreeForgeBootstrapImageError(
@@ -258,18 +275,19 @@ def _validate_inputs() -> None:
             f"{source_sha}"
         )
 
-    if not SOURCE_VBMETA.is_file():
+    if not resolved_source_vbmeta.is_file():
         raise TreeForgeBootstrapImageError(
             "locked AOSP tangorpro vbmeta "
-            f"missing: {SOURCE_VBMETA}"
+            f"missing: {resolved_source_vbmeta}"
         )
 
     vbmeta_sha = _sha256(
-        SOURCE_VBMETA
+        resolved_source_vbmeta
     )
 
     if (
-        vbmeta_sha
+        source_vbmeta is None
+        and vbmeta_sha
         != EXPECTED_SOURCE_VBMETA_SHA256
     ):
         raise TreeForgeBootstrapImageError(
@@ -340,13 +358,20 @@ def _verify_public_key(
 
 def _verify_parent_chain(
     avbtool: Path,
+    *,
+    source_vbmeta: Path | None = None,
 ) -> None:
+    resolved_source_vbmeta = (
+        SOURCE_VBMETA
+        if source_vbmeta is None
+        else source_vbmeta
+    )
     info = _run(
         [
             str(avbtool),
             "info_image",
             "--image",
-            str(SOURCE_VBMETA),
+            str(resolved_source_vbmeta),
         ]
     )
 
@@ -387,7 +412,22 @@ def _verify_parent_chain(
 
 def _expected_metadata(
     init_boot_sha: str,
+    *,
+    source_init_boot: Path | None = None,
+    source_vbmeta: Path | None = None,
 ) -> dict[str, object]:
+    resolved_source_init_boot = (
+        SOURCE_INIT_BOOT
+        if source_init_boot is None
+        else source_init_boot
+    )
+
+    resolved_source_vbmeta = (
+        SOURCE_VBMETA
+        if source_vbmeta is None
+        else source_vbmeta
+    )
+
     return {
         "schema":
             1,
@@ -403,10 +443,14 @@ def _expected_metadata(
             "BP1A.250505.005.D1",
 
         "source_init_boot_sha256":
-            EXPECTED_SOURCE_SHA256,
+            _sha256(
+                resolved_source_init_boot
+            ),
 
         "source_vbmeta_sha256":
-            EXPECTED_SOURCE_VBMETA_SHA256,
+            _sha256(
+                resolved_source_vbmeta
+            ),
 
         "runtime_ramdisk_sha256":
             _sha256(
@@ -478,8 +522,15 @@ def _expected_metadata(
     }
 
 
-def build_image() -> Path:
-    _validate_inputs()
+def build_image(
+    *,
+    source_init_boot: Path | None = None,
+    source_vbmeta: Path | None = None,
+) -> Path:
+    _validate_inputs(
+        source_init_boot=source_init_boot,
+        source_vbmeta=source_vbmeta,
+    )
 
     kernel = ensure_bootstrap_kernel()
 
@@ -514,7 +565,8 @@ def build_image() -> Path:
     )
 
     _verify_parent_chain(
-        avbtool
+        avbtool,
+        source_vbmeta=source_vbmeta,
     )
 
     IMAGE_WORK.mkdir(
@@ -621,7 +673,9 @@ def build_image() -> Path:
     )
 
     metadata = _expected_metadata(
-        init_boot_sha
+        init_boot_sha,
+        source_init_boot=source_init_boot,
+        source_vbmeta=source_vbmeta,
     )
 
     OUTPUT_METADATA.write_text(
@@ -688,8 +742,15 @@ def build_image() -> Path:
     return OUTPUT_IMAGE
 
 
-def verify_image() -> Path:
-    _validate_inputs()
+def verify_image(
+    *,
+    source_init_boot: Path | None = None,
+    source_vbmeta: Path | None = None,
+) -> Path:
+    _validate_inputs(
+        source_init_boot=source_init_boot,
+        source_vbmeta=source_vbmeta,
+    )
 
     kernel = ensure_bootstrap_kernel()
 
@@ -762,7 +823,8 @@ def verify_image() -> Path:
     )
 
     _verify_parent_chain(
-        avbtool
+        avbtool,
+        source_vbmeta=source_vbmeta,
     )
 
     _run(
@@ -901,8 +963,55 @@ def verify_image() -> Path:
         ]
     )
 
+    kernel_size = None
+
+    for line in boot_unpack_output.splitlines():
+        if line.startswith("kernel_size:"):
+            raw_size = line.split(
+                ":",
+                1,
+            )[1].strip()
+
+            try:
+                kernel_size = int(raw_size)
+            except ValueError as exc:
+                raise TreeForgeBootstrapImageError(
+                    "Bootstrap boot kernel size "
+                    "is not an integer: "
+                    f"{raw_size}"
+                ) from exc
+
+            break
+
+    if kernel_size is None or kernel_size <= 0:
+        raise TreeForgeBootstrapImageError(
+            "Bootstrap boot kernel is "
+            "missing or empty"
+        )
+
+    unpacked_kernel = (
+        boot_unpack
+        / "kernel"
+    )
+
+    if not unpacked_kernel.is_file():
+        raise TreeForgeBootstrapImageError(
+            "unpacked Bootstrap kernel missing"
+        )
+
+    unpacked_kernel_size = (
+        unpacked_kernel.stat().st_size
+    )
+
+    if unpacked_kernel_size != kernel_size:
+        raise TreeForgeBootstrapImageError(
+            "Bootstrap kernel header/file "
+            "size mismatch: "
+            f"header={kernel_size} "
+            f"file={unpacked_kernel_size}"
+        )
+
     for marker in (
-        "kernel_size: 16484065",
         "ramdisk size: 0",
         "boot image header version: 4",
         "boot.img signature size: 0",
@@ -984,7 +1093,9 @@ def verify_image() -> Path:
 
     expected_metadata = (
         _expected_metadata(
-            init_boot_sha
+            init_boot_sha,
+            source_init_boot=source_init_boot,
+            source_vbmeta=source_vbmeta,
         )
     )
 

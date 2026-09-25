@@ -61,20 +61,20 @@ PROVIDER_CHECKSUMS = (
 EXPECTED_RUNTIME = {
     "initramfs.cpio":
         (
-            "7907b4d202e6fbf95b0510473ad455aa"
-            "afdb702cd6ac87308581b8bc71b29920"
+            "b35a6497880950cc0eb28bffc60077f6"
+            "4b7b05621fb8cc42b25773dedbdbce35"
         ),
 
     "initramfs.lz4":
         (
-            "3997dcf71ff2779072147693ac04ed16"
-            "5d35887e4ff3e645ae21dabb0eb8db67"
+            "ee0deacd5551109330491451034d55b4"
+            "0264483b11b01f4b82eae05155eb6095"
         ),
 
     "treeforge-menu":
         (
-            "e8d41d28c2250037b268c6bc977e22b5"
-            "ef6ca738ab517b889e2fb21c1b28e485"
+            "9e90410312a7f003fef1b3912904f303"
+            "5cbbd115fba7511beae274e7558dd110"
         ),
 }
 

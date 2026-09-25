@@ -35,26 +35,13 @@ ADBD_PROVIDER_ROOT = (
 )
 
 EXPECTED_ADBD_SHA256 = (
-    "46ab32860fc78a7556c47b71e8f4a208"
-    "9f43492fd78bc30727f94a3b466e4109"
+    "625fbc447f0f1f9490aa0b72f88dd34f"
+    "0f7e84c93fe80484288336acda28d53a"
 )
-
-KEXEC_PROVIDER_ROOT = (
-    PROVIDERS
-    / "external"
-    / "kexec-tools"
-    / "android-15.0.0_r36-linux-arm64"
-)
-
-EXPECTED_KEXEC_SHA256 = (
-    "a25f447a29273b68bc1a4ee119a277b9"
-    "51ece8fbab4b0e90822ad3ee3c304a6d"
-)
-
 
 EXPECTED_ADB_SERVICE_SHA256 = (
-    "e10c822e232c8d95a9da7ba83a8ff6bd"
-    "818daf7d8ae78aceed182118b925376a"
+    "9b1c95e12289a16e297ed516e2526ff2"
+    "f7365b44cdf9beda7d81e93e95d31115"
 )
 
 RUNTIME_OUT = (
@@ -226,54 +213,6 @@ def _compile_adb_service(
     return output
 
 
-def _copy_kexec_provider(
-    stage: Path,
-) -> None:
-    source = (
-        KEXEC_PROVIDER_ROOT
-        / "payload"
-        / "bin"
-        / "kexec"
-    )
-
-    if not source.is_file():
-        raise TreeForgeBootstrapRuntimeError(
-            "kexec-tools provider binary "
-            f"missing: {source}"
-        )
-
-    actual = _sha256(
-        source
-    )
-
-    if actual != EXPECTED_KEXEC_SHA256:
-        raise TreeForgeBootstrapRuntimeError(
-            "kexec-tools provider identity "
-            f"changed: {actual}"
-        )
-
-    destination = (
-        stage
-        / "system"
-        / "bin"
-        / "kexec"
-    )
-
-    destination.parent.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    shutil.copy2(
-        source,
-        destination,
-    )
-
-    destination.chmod(
-        0o755
-    )
-
-
 def _copy_external_provider(
     stage: Path,
 ) -> None:
@@ -394,10 +333,6 @@ def _stage_runtime() -> Path:
 
     _copy_external_provider(
         stage
-    )
-
-    _copy_kexec_provider(
-        stage,
     )
 
     _install_root_busybox(
