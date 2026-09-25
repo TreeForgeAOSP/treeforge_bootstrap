@@ -354,37 +354,44 @@ Pixel Partitioner still owns the remaining installation-side integration: provid
 
 ## Host realizer provider status
 
-The self-contained host-side Bootstrap realizer is accepted for the `v1.0b2` release line.
+The `v1.0b3` Bootstrap runtime has an accepted provider-only host-realizer path.
 
-The accepted provider boundary separates runtime payload from host realization logic:
-
-```text
-runtime provider
-    -> accepted initramfs/menu payload
-
-host realizer provider
-    -> frozen-runtime verification
-    -> boot/init_boot realization
-    -> AVB graph realization and verification
-    -> complete 15-image family
-```
-
-The realizer consumes the runtime provider as a separate dependency and consumes AVB private keys only from the downstream consumer's supplied keyset.
-
-The accepted isolated-provider test reproduced the hardware-accepted identities:
+The accepted dependency model is:
 
 ```text
-boot.img
-59d9103f7c9e343a96af6d37f9307f4610db7d228976b9d67ac59fab00bcf20b
-
-init_boot.img
-be49250687786bea3ac14e0d1744fddb6f3e51ba34d4dd19778eb5900a5def80
-
-manifest.json
-0c10b6d8e12a38183129cc64ff57c00eb4794c2f596af5c6b1f93bcd203551c9
+v1.0b3 runtime provider
+        +
+v1.0b3 host realizer
+        +
+validated tangorpro device-family input
+        +
+consumer-owned AVB keyset
+        |
+        v
+verified TreeForge Bootstrap image family
 ```
 
-The provider does not redistribute the Google canonical seed, the adbd build provider, AOSP test signing keys, or consumer AVB private keys.
+The host realizer does not bundle the canonical Google `init_boot` seed, the ADB build provider, private AVB keys, an AOSP checkout, a kernel checkout, or `runtime.json`.
+
+The hardware-accepted runtime source checkpoint is:
+
+```text
+f1c03103a940bf39054b8fca96e09a9c34332a10
+```
+
+The accepted runtime-provider SHA-256 is:
+
+```text
+15b132ad6c1cc63f5b087b6d2ba7d497558f72b02114bfc8da264bff51160d16
+```
+
+A deterministic pre-contract realizer was accepted before the release-contract commit:
+
+```text
+a94a388b98561c0091d96c36a095fd73b83f08732b725ea452f28759cbbfa5e3
+```
+
+That pre-contract archive is an acceptance input, not the final published realizer identity. The final realizer is rebuilt from the committed release contract so its archive does not participate in a self-referential source hash.
 
 ## Safety model
 
@@ -433,10 +440,10 @@ Generated output and private provider state are not source and should not be com
 
 ## Current release
 
-Current beta release line:
+Current release candidate:
 
 ```text
-v1.0b2
+v1.0b3
 ```
 
 Repository:
@@ -445,6 +452,30 @@ Repository:
 TreeForgeAOSP/treeforge_bootstrap
 ```
 
-`v1.0b2` keeps the hardware-accepted runtime unchanged and adds the accepted self-contained host-realizer provider boundary.
+`v1.0b3` adds the permanent Bootstrap-owned **TreeForge Diagnostics** target while preserving normal Android and storage-backed Alternate OS handoff.
 
-The remaining Pixel Partitioner work is installation-side integration of those published providers; broader alternate-OS and multiboot workflows remain active development work.
+Hardware acceptance covers:
+
+- native TreeForge Diagnostics PID 1;
+- tmpfs diagnostic root with detached old root;
+- retained Bootstrap ADB across diagnostic handoff;
+- TreeForge framebuffer-bridge status screen and live heartbeat;
+- no `treeforge_os` dependency for Diagnostics;
+- successful Android A regression;
+- successful storage-backed Alternate OS regression;
+- provider-only host realization from the frozen runtime provider.
+
+Accepted realization identities:
+
+```text
+boot.img
+59d9103f7c9e343a96af6d37f9307f4610db7d228976b9d67ac59fab00bcf20b
+
+init_boot.img
+322dc7baa40e10b4fdf4ccb4e8e64d0a7266cf8229bae3a70b66b37d110e924f
+
+realized manifest
+d7b34c73b1674f3b80d2fd9de4817d62aeaf1117c8da12264cd5ce6eb0897bc8
+```
+
+`v1.0b3` remains a beta milestone. ChromiumOS itself is not shipped by this release; the Alternate OS boundary remains the storage-backed `treeforge_os` handoff intended for ChromiumOS and future operating-system targets.
