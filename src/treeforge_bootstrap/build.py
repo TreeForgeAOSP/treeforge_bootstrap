@@ -15,6 +15,7 @@ from .paths import (
 
 from .runtime import (
     build_runtime,
+    verify_frozen_runtime,
     verify_runtime,
 )
 
@@ -183,6 +184,7 @@ def main() -> None:
             "doctor",
             "build",
             "verify",
+            "verify-frozen-runtime",
             "package",
             "verify-provider",
             "image",
@@ -252,6 +254,8 @@ def main() -> None:
         build_runtime()
     elif args.command == "verify":
         verify_runtime()
+    elif args.command == "verify-frozen-runtime":
+        verify_frozen_runtime()
     elif args.command == "package":
         package_provider()
     elif args.command == "verify-provider":

@@ -1846,6 +1846,7 @@ def realize_family(
         source_vbmeta=(
             source_images["vbmeta"]
         ),
+        signing_key=avb_key,
     )
 
     verify_image(
@@ -1855,6 +1856,7 @@ def realize_family(
         source_vbmeta=(
             source_images["vbmeta"]
         ),
+        signing_key=avb_key,
     )
 
     #

@@ -23,7 +23,7 @@ from .paths import (
     WORK,
 )
 
-from .runtime import verify_runtime
+from .runtime import verify_frozen_runtime
 
 
 class TreeForgeBootstrapImageError(
@@ -228,11 +228,74 @@ def _run(
     return result.stdout
 
 
+def _resolve_signing_key(
+    signing_key: Path | None,
+) -> Path:
+    """
+    Resolve the source-compatible boot-chain signing key.
+
+    Provider consumers may supply the preserve-source key explicitly.
+    A distinct replacement-trust key is not used for initial image
+    construction; avb_graph applies replacement trust afterwards.
+    """
+
+    if signing_key is not None:
+        explicit = (
+            signing_key
+            .expanduser()
+            .resolve()
+        )
+
+        if not explicit.is_file():
+            raise TreeForgeBootstrapImageError(
+                "explicit AVB signing key missing: "
+                f"{explicit}"
+            )
+
+        if (
+            _sha256(explicit)
+            == EXPECTED_KEY_SHA256
+        ):
+            return explicit
+
+        #
+        # Preserve the established replacement-trust developer path:
+        # build the source-compatible base images first, then let
+        # avb_graph apply the requested replacement identity.
+        #
+        if not SIGNING_KEY.is_file():
+            raise TreeForgeBootstrapImageError(
+                "replacement AVB key supplied, but "
+                "source-compatible base signing key "
+                "is unavailable"
+            )
+
+    if not SIGNING_KEY.is_file():
+        raise TreeForgeBootstrapImageError(
+            "AOSP RSA-2048 AVB key missing: "
+            f"{SIGNING_KEY}"
+        )
+
+    key_sha = _sha256(
+        SIGNING_KEY
+    )
+
+    if key_sha != EXPECTED_KEY_SHA256:
+        raise TreeForgeBootstrapImageError(
+            "AOSP RSA-2048 AVB key "
+            "identity changed: "
+            f"{key_sha}"
+        )
+
+    return SIGNING_KEY
+
+
 def _validate_inputs(
     *,
     source_init_boot: Path | None = None,
     source_vbmeta: Path | None = None,
-) -> None:
+    signing_key: Path | None = None,
+) -> Path:
     resolved_source_init_boot = (
         SOURCE_INIT_BOOT
         if source_init_boot is None
@@ -245,7 +308,7 @@ def _validate_inputs(
         else source_vbmeta
     )
 
-    verify_runtime()
+    verify_frozen_runtime()
 
     if not RUNTIME_RAMDISK.is_file():
         raise TreeForgeBootstrapImageError(
@@ -296,26 +359,15 @@ def _validate_inputs(
             f"{vbmeta_sha}"
         )
 
-    if not SIGNING_KEY.is_file():
-        raise TreeForgeBootstrapImageError(
-            "AOSP RSA-2048 AVB key missing: "
-            f"{SIGNING_KEY}"
-        )
-
-    key_sha = _sha256(
-        SIGNING_KEY
+    return _resolve_signing_key(
+        signing_key
     )
-
-    if key_sha != EXPECTED_KEY_SHA256:
-        raise TreeForgeBootstrapImageError(
-            "AOSP RSA-2048 AVB key "
-            "identity changed: "
-            f"{key_sha}"
-        )
 
 
 def _verify_public_key(
     avbtool: Path,
+    *,
+    resolved_signing_key: Path,
 ) -> None:
     IMAGE_WORK.mkdir(
         parents=True,
@@ -335,7 +387,7 @@ def _verify_public_key(
             str(avbtool),
             "extract_public_key",
             "--key",
-            str(SIGNING_KEY),
+            str(resolved_signing_key),
             "--output",
             str(public_key),
         ]
@@ -526,10 +578,12 @@ def build_image(
     *,
     source_init_boot: Path | None = None,
     source_vbmeta: Path | None = None,
+    signing_key: Path | None = None,
 ) -> Path:
-    _validate_inputs(
+    resolved_signing_key = _validate_inputs(
         source_init_boot=source_init_boot,
         source_vbmeta=source_vbmeta,
+        signing_key=signing_key,
     )
 
     kernel = ensure_bootstrap_kernel()
@@ -561,7 +615,10 @@ def build_image(
     )
 
     _verify_public_key(
-        avbtool
+        avbtool,
+        resolved_signing_key=(
+            resolved_signing_key
+        ),
     )
 
     _verify_parent_chain(
@@ -639,7 +696,7 @@ def build_image(
             ALGORITHM,
 
             "--key",
-            str(SIGNING_KEY),
+            str(resolved_signing_key),
 
             "--rollback_index",
             str(ROLLBACK_INDEX),
@@ -746,10 +803,12 @@ def verify_image(
     *,
     source_init_boot: Path | None = None,
     source_vbmeta: Path | None = None,
+    signing_key: Path | None = None,
 ) -> Path:
-    _validate_inputs(
+    resolved_signing_key = _validate_inputs(
         source_init_boot=source_init_boot,
         source_vbmeta=source_vbmeta,
+        signing_key=signing_key,
     )
 
     kernel = ensure_bootstrap_kernel()
@@ -819,7 +878,10 @@ def verify_image(
     )
 
     _verify_public_key(
-        avbtool
+        avbtool,
+        resolved_signing_key=(
+            resolved_signing_key
+        ),
     )
 
     _verify_parent_chain(
@@ -834,7 +896,7 @@ def verify_image(
             "--image",
             str(OUTPUT_BOOT_IMAGE),
             "--key",
-            str(SIGNING_KEY),
+            str(resolved_signing_key),
         ]
     )
 
@@ -845,7 +907,7 @@ def verify_image(
             "--image",
             str(OUTPUT_IMAGE),
             "--key",
-            str(SIGNING_KEY),
+            str(resolved_signing_key),
         ]
     )
 

@@ -70,6 +70,36 @@ RUNTIME_METADATA = (
 )
 
 
+
+#
+# Hardware-accepted v1 frozen runtime identities.
+#
+# These identify the exact payload published by the TreeForge Bootstrap
+# runtime provider. They intentionally do not require the canonical
+# Google init_boot seed: reconstruction verification remains the job of
+# verify_runtime().
+#
+FROZEN_RUNTIME_CPIO_SHA256 = (
+    "b35a6497880950cc0eb28bffc60077f6"
+    "4b7b05621fb8cc42b25773dedbdbce35"
+)
+
+FROZEN_RUNTIME_CPIO_BYTES = 15_566_528
+
+FROZEN_RUNTIME_LZ4_SHA256 = (
+    "ee0deacd5551109330491451034d55b4"
+    "0264483b11b01f4b82eae05155eb6095"
+)
+
+FROZEN_RUNTIME_LZ4_BYTES = 7_738_213
+
+FROZEN_RUNTIME_MENU_SHA256 = (
+    "9e90410312a7f003fef1b3912904f303"
+    "5cbbd115fba7511beae274e7558dd110"
+)
+
+FROZEN_RUNTIME_MENU_BYTES = 10_206_508
+
 def _sha256(
     path: Path,
 ) -> str:
@@ -631,6 +661,86 @@ def build_runtime() -> Path:
     print("SIGNED_IMAGE=NO")
     print("SIGNING_OWNER=DOWNSTREAM_CONSUMER")
     print("TREEFORGE_BOOTSTRAP_RUNTIME_BUILD=PASS")
+
+    return RAW_INITRAMFS
+
+
+
+def verify_frozen_runtime() -> Path:
+    """
+    Verify the exact released Bootstrap runtime payload without
+    reconstructing it from the canonical Google init_boot seed.
+
+    This is the consumer/provider verification boundary used by image
+    realization. Full source/reconstruction verification remains in
+    verify_runtime().
+    """
+
+    expected = (
+        (
+            RAW_INITRAMFS,
+            FROZEN_RUNTIME_CPIO_SHA256,
+            FROZEN_RUNTIME_CPIO_BYTES,
+            "initramfs.cpio",
+        ),
+        (
+            COMPRESSED_INITRAMFS,
+            FROZEN_RUNTIME_LZ4_SHA256,
+            FROZEN_RUNTIME_LZ4_BYTES,
+            "initramfs.lz4",
+        ),
+        (
+            MENU_BINARY,
+            FROZEN_RUNTIME_MENU_SHA256,
+            FROZEN_RUNTIME_MENU_BYTES,
+            "treeforge-menu",
+        ),
+    )
+
+    for (
+        path,
+        expected_sha256,
+        expected_bytes,
+        label,
+    ) in expected:
+        if not path.is_file():
+            raise TreeForgeBootstrapRuntimeError(
+                "frozen runtime output missing: "
+                f"{path}"
+            )
+
+        actual_bytes = path.stat().st_size
+
+        if actual_bytes != expected_bytes:
+            raise TreeForgeBootstrapRuntimeError(
+                "frozen runtime size mismatch: "
+                f"{label}: "
+                f"{actual_bytes} != "
+                f"{expected_bytes}"
+            )
+
+        actual_sha256 = _sha256(path)
+
+        if actual_sha256 != expected_sha256:
+            raise TreeForgeBootstrapRuntimeError(
+                "frozen runtime identity mismatch: "
+                f"{label}: "
+                f"{actual_sha256}"
+            )
+
+    if (
+        COMPRESSED_INITRAMFS.read_bytes()[:4]
+        != b"\x02\x21\x4c\x18"
+    ):
+        raise TreeForgeBootstrapRuntimeError(
+            "frozen runtime LZ4 framing changed"
+        )
+
+    print("VISIBLE_MENU_IDENTITY=TreeForge Boot Manager")
+    print("TREEFORGE_BOOTSTRAP_RUNTIME_ABI=V1")
+    print("SIGNED_IMAGE=NO")
+    print("SIGNING_OWNER=DOWNSTREAM_CONSUMER")
+    print("TREEFORGE_BOOTSTRAP_FROZEN_RUNTIME_VERIFY=PASS")
 
     return RAW_INITRAMFS
 
