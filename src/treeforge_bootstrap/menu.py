@@ -23,6 +23,7 @@ class MenuAction(str, Enum):
     BOOT_ANDROID_SLOT_A = "boot_android_slot_a"
     BOOT_ANDROID_SLOT_B = "boot_android_slot_b"
     BOOT_ALTERNATE_OS = "boot_alternate_os"
+    BOOT_DIAGNOSTICS = "boot_diagnostics"
     BOOT_ROOTED_ANDROID = "boot_rooted_android"
     INSTALL_ROOT = "install_root"
     UNINSTALL_ROOT = "uninstall_root"

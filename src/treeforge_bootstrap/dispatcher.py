@@ -1653,6 +1653,7 @@ static const char tfb_version[] =
 #define TFB_ACTION_LIVE_CONSOLE 13
 #define TFB_ACTION_RESTART_ADB_USB 14
 #define TFB_ACTION_NOT_IMPLEMENTED 15
+#define TFB_ACTION_BOOT_DIAGNOSTICS 16
 
 #define TFB_CONDITION_ALWAYS 0
 #define TFB_CONDITION_FULL_AB 1
@@ -2243,6 +2244,13 @@ static const char *tfb_menu_action_name(
         == TFB_ACTION_BOOT_ALTERNATE_OS
     ) {
         return "boot_alternate_os";
+    }
+
+    if (
+        action
+        == TFB_ACTION_BOOT_DIAGNOSTICS
+    ) {
+        return "boot_diagnostics";
     }
 
     if (
@@ -8717,12 +8725,1085 @@ static void tfb_live_console_run(
 
 
 
+
+/*
+ * ================================================================
+ * TFB_ALTROOT_PID1_PIVOT_V1
+ * ================================================================
+ *
+ * Storage-backed same-kernel alternate userspace handoff.
+ *
+ * Pixel Partitioner owns treeforge_os.  Bootstrap mounts the rootfs,
+ * validates the accepted handoff contract, prepares the mount
+ * namespace, pivot_root()s into it, detaches the old Android root,
+ * and executes the rootfs-native /init as PID 1.
+ *
+ * No kexec.
+ * No GPT changes.
+ * No slot mutation.
+ * No embedded alternate-root payload.
+ */
+
+#define TFB_ALTROOT_ROOT \
+    "/mnt/treeforge-altroot"
+
+#define TFB_ALTROOT_STORAGE \
+    "/dev/block/by-name/treeforge_os"
+
+#define TFB_ALTROOT_STORAGE_FS \
+    "ext4"
+
+#define TFB_ALTROOT_LOADER_BUSYBOX \
+    "/dev/treeforge-bootstrap-runtime/system/bin/busybox"
+
+#ifndef TFB_MS_BIND
+#define TFB_MS_BIND 4096UL
+#endif
+
+#ifndef TFB_MS_REC
+#define TFB_MS_REC 16384UL
+#endif
+
+#ifndef TFB_MS_PRIVATE
+#define TFB_MS_PRIVATE 262144UL
+#endif
+
+#ifndef TFB_MNT_DETACH
+#define TFB_MNT_DETACH 2
+#endif
+
+#ifndef TFB_EEXIST
+#define TFB_EEXIST 17
+#endif
+
+/*
+ * Block realization is implemented later with the Pixel Partitioner
+ * block-runtime helpers. Alternate-OS boot uses the same generic
+ * realization primitive without activating Pixel Partitioner.
+ */
+static int tfb_realize_block_nodes(void);
+
+
+static long tfb_altroot_mount(
+    const char *source,
+    const char *target,
+    const char *filesystem,
+    unsigned long flags,
+    const char *data
+) {
+    return tfb_syscall6(
+        SYS_MOUNT,
+        (long) source,
+        (long) target,
+        (long) filesystem,
+        (long) flags,
+        (long) data,
+        0
+    );
+}
+
+
+static int tfb_altroot_mkdir(
+    const char *path,
+    long mode
+) {
+    long result = tfb_syscall3(
+        SYS_MKDIRAT,
+        AT_FDCWD,
+        (long) path,
+        mode
+    );
+
+    return (
+        result >= 0
+        || result == -TFB_EEXIST
+    );
+}
+
+
+static void tfb_altroot_cleanup_partial(
+    void
+) {
+    tfb_syscall2(
+        SYS_UMOUNT2,
+        (long) TFB_ALTROOT_ROOT,
+        TFB_MNT_DETACH
+    );
+}
+
+
+static int tfb_altroot_prepare(
+    void
+) {
+    tfb_altroot_cleanup_partial();
+
+    /*
+     * Realize the existing kernel-visible block topology locally.
+     * This does not modify GPT or partition content and does not
+     * activate Pixel Partitioner authorization.
+     */
+    if (
+        tfb_realize_block_nodes()
+        != 0
+    ) {
+        tfb_log(
+            "altroot-storage=block-realization-failed"
+        );
+
+        return 0;
+    }
+
+    tfb_log(
+        "altroot-storage=block-realization-ready"
+    );
+
+    tfb_altroot_mkdir(
+        "/mnt",
+        0755
+    );
+
+    if (
+        !tfb_altroot_mkdir(
+            TFB_ALTROOT_ROOT,
+            0755
+        )
+    ) {
+        tfb_log(
+            "altroot-test=root-mkdir-failed"
+        );
+
+        return 0;
+    }
+
+    /*
+     * pivot_root requires new_root itself to be a mount point.
+     */
+    if (
+        tfb_altroot_mount(
+            TFB_ALTROOT_STORAGE,
+            TFB_ALTROOT_ROOT,
+            TFB_ALTROOT_STORAGE_FS,
+            0,
+            0
+        ) < 0
+    ) {
+        tfb_log(
+            "altroot-storage=mount-failed"
+        );
+
+        return 0;
+    }
+
+    tfb_log(
+        "altroot-storage=mounted"
+    );
+
+    const char *directories[] = {
+        "/mnt/treeforge-altroot/bin",
+        "/mnt/treeforge-altroot/system",
+        "/mnt/treeforge-altroot/system/bin",
+        "/mnt/treeforge-altroot/dev",
+        "/mnt/treeforge-altroot/proc",
+        "/mnt/treeforge-altroot/sys",
+        "/mnt/treeforge-altroot/config",
+        "/mnt/treeforge-altroot/tmp",
+        "/mnt/treeforge-altroot/.oldroot",
+    };
+
+    for (
+        usize index = 0;
+        index
+            < sizeof(directories)
+                / sizeof(directories[0]);
+        index++
+    ) {
+        if (
+            !tfb_altroot_mkdir(
+                directories[index],
+                0755
+            )
+        ) {
+            tfb_log(
+                "altroot-test=directory-layout-failed"
+            );
+
+            tfb_altroot_cleanup_partial();
+            return 0;
+        }
+    }
+
+    if (
+        tfb_altroot_mount(
+            "/dev",
+            "/mnt/treeforge-altroot/dev",
+            0,
+            TFB_MS_BIND | TFB_MS_REC,
+            0
+        ) < 0
+    ) {
+        tfb_log(
+            "altroot-test=dev-bind-failed"
+        );
+
+        tfb_altroot_cleanup_partial();
+        return 0;
+    }
+
+    if (
+        tfb_altroot_mount(
+            "/proc",
+            "/mnt/treeforge-altroot/proc",
+            0,
+            TFB_MS_BIND | TFB_MS_REC,
+            0
+        ) < 0
+    ) {
+        tfb_log(
+            "altroot-test=proc-bind-failed"
+        );
+
+        tfb_altroot_cleanup_partial();
+        return 0;
+    }
+
+    if (
+        tfb_altroot_mount(
+            "/sys",
+            "/mnt/treeforge-altroot/sys",
+            0,
+            TFB_MS_BIND | TFB_MS_REC,
+            0
+        ) < 0
+    ) {
+        tfb_log(
+            "altroot-test=sys-bind-failed"
+        );
+
+        tfb_altroot_cleanup_partial();
+        return 0;
+    }
+
+    if (
+        tfb_altroot_mount(
+            "/config",
+            "/mnt/treeforge-altroot/config",
+            0,
+            TFB_MS_BIND | TFB_MS_REC,
+            0
+        ) < 0
+    ) {
+        tfb_log(
+            "altroot-test=config-bind-failed"
+        );
+
+        tfb_altroot_cleanup_partial();
+        return 0;
+    }
+
+    if (
+        tfb_altroot_mount(
+            "treeforge-alt-tmp",
+            "/mnt/treeforge-altroot/tmp",
+            "tmpfs",
+            0,
+            "mode=1777"
+        ) < 0
+    ) {
+        tfb_log(
+            "altroot-test=tmp-mount-failed"
+        );
+
+        tfb_altroot_cleanup_partial();
+        return 0;
+    }
+
+    /*
+     * Storage-backed alternate userspace V1.
+     *
+     * Pixel Partitioner owns treeforge_os. The alternate rootfs is
+     * already provisioned there. Bootstrap requires only the native
+     * PID 1 and the rootfs ownership marker.
+     */
+    if (
+        !tfb_probe_readable_path(
+            "/mnt/treeforge-altroot/init"
+        )
+        || !tfb_probe_readable_path(
+            "/mnt/treeforge-altroot/"
+            "TREEFORGE_ROOTFS_V1"
+        )
+    ) {
+        tfb_log(
+            "altroot-storage=payload-missing"
+        );
+
+        tfb_altroot_cleanup_partial();
+        return 0;
+    }
+
+    tfb_log(
+        "altroot-storage=payload-ready"
+    );
+
+    /*
+     * Preserve the accepted diagnostic ADB shell compatibility used by
+     * the existing storage-backed canary. The alternate PID 1 remains
+     * completely native; BusyBox stays in Bootstrap's retained /dev
+     * runtime and is not part of the alternate rootfs payload.
+     */
+    const char *diagnostic_busybox =
+        TFB_ALTROOT_LOADER_BUSYBOX;
+
+    tfb_syscall3(
+        SYS_UNLINKAT,
+        AT_FDCWD,
+        (long)
+            "/mnt/treeforge-altroot/bin/sh",
+        0
+    );
+
+    tfb_syscall3(
+        SYS_UNLINKAT,
+        AT_FDCWD,
+        (long)
+            "/mnt/treeforge-altroot/system/bin/sh",
+        0
+    );
+
+    long alt_bin_shell =
+        tfb_syscall3(
+            SYS_SYMLINKAT,
+            (long) diagnostic_busybox,
+            AT_FDCWD,
+            (long)
+                "/mnt/treeforge-altroot/bin/sh"
+        );
+
+    long alt_system_shell =
+        tfb_syscall3(
+            SYS_SYMLINKAT,
+            (long) diagnostic_busybox,
+            AT_FDCWD,
+            (long)
+                "/mnt/treeforge-altroot/system/bin/sh"
+        );
+
+    if (
+        alt_bin_shell < 0
+        || alt_system_shell < 0
+        || !tfb_probe_readable_path(
+            "/mnt/treeforge-altroot/bin/sh"
+        )
+        || !tfb_probe_readable_path(
+            "/mnt/treeforge-altroot/system/bin/sh"
+        )
+    ) {
+        tfb_log(
+            "altroot-test=diagnostic-shell-compat-failed"
+        );
+
+        tfb_altroot_cleanup_partial();
+        return 0;
+    }
+
+    tfb_log(
+        "altroot-test=diagnostic-shell-compat-ready"
+    );
+
+    tfb_log(
+        "altroot-test=native-init-ready"
+    );
+
+    tfb_log(
+        "altroot-test=prepared"
+    );
+
+    return 1;
+}
+
+
+__attribute__((noreturn))
+static void tfb_altroot_pivot_and_exec(
+    void
+) {
+    /*
+     * Prevent root replacement from propagating outside the active
+     * mount namespace.
+     */
+    if (
+        tfb_altroot_mount(
+            0,
+            "/",
+            0,
+            TFB_MS_REC | TFB_MS_PRIVATE,
+            0
+        ) < 0
+    ) {
+        tfb_transition_failure(
+            "altroot-root-private"
+        );
+    }
+
+    if (
+        tfb_syscall1(
+            SYS_CHDIR,
+            (long) TFB_ALTROOT_ROOT
+        ) < 0
+    ) {
+        tfb_transition_failure(
+            "altroot-chdir-newroot"
+        );
+    }
+
+    tfb_log(
+        "altroot-test=pivot-begin"
+    );
+
+    if (
+        tfb_syscall2(
+            SYS_PIVOT_ROOT,
+            (long) ".",
+            (long) ".oldroot"
+        ) < 0
+    ) {
+        tfb_transition_failure(
+            "altroot-pivot-root"
+        );
+    }
+
+    tfb_syscall1(
+        SYS_CHDIR,
+        (long) "/"
+    );
+
+    /*
+     * Remove the old Android root from the visible filesystem tree.
+     * No underlying Android partition is modified.
+     */
+    tfb_syscall2(
+        SYS_UMOUNT2,
+        (long) "/.oldroot",
+        TFB_MNT_DETACH
+    );
+
+    tfb_log(
+        "altroot-test=payload-exec"
+    );
+
+    char *alt_argv[] = {
+        (char *) "/init",
+        0
+    };
+
+    char *alt_envp[] = {
+        (char *) "PATH=/bin:/system/bin",
+        (char *) "HOME=/",
+        (char *) "TERM=linux",
+        0
+    };
+
+    tfb_syscall3(
+        SYS_EXECVE,
+        (long) "/init",
+        (long) alt_argv,
+        (long) alt_envp
+    );
+
+    tfb_log(
+        "altroot-test=payload-exec-failed"
+    );
+
+    for (;;) {
+        tfb_sleep_ms(
+            1000
+        );
+    }
+}
+
+
+
+/*
+ * ================================================================
+ * TFB_DIAGNOSTIC_PID1_TMPFS_V1
+ * ================================================================
+ *
+ * Permanent Bootstrap-owned diagnostic boot target.
+ *
+ * This is deliberately independent of treeforge_os.
+ *
+ * Bootstrap creates a disposable tmpfs root, bind-mounts the retained
+ * Linux runtime surfaces, pivots PID 1 into it, detaches the old Android
+ * root, then executes the retained static diagnostic /init.
+ *
+ * The display is transferred through a second already-open descriptor
+ * to the accepted TreeForge framebuffer bridge. The diagnostic runtime
+ * therefore does not need to recreate or reprobe display hardware.
+ *
+ * No kexec.
+ * No storage write.
+ * No GPT mutation.
+ * No slot mutation.
+ */
+
+#define TFB_DIAGNOSTIC_ROOT \
+    "/mnt/treeforge-diagnostic"
+
+#define TFB_DIAGNOSTIC_INIT \
+    "/dev/treeforge-bootstrap-runtime/" \
+    "system/bin/treeforge-diagnostic-init"
+
+#define TFB_DIAGNOSTIC_BUSYBOX \
+    "/dev/treeforge-bootstrap-runtime/" \
+    "system/bin/busybox"
+
+#define TFB_DIAGNOSTIC_FB_FD_PATH \
+    "/dev/treeforge-bootstrap-diagnostic-fb-fd"
+
+
+static void tfb_diagnostic_cleanup_partial(
+    void
+) {
+    tfb_syscall2(
+        SYS_UMOUNT2,
+        (long) TFB_DIAGNOSTIC_ROOT,
+        TFB_MNT_DETACH
+    );
+
+    tfb_syscall3(
+        SYS_UNLINKAT,
+        AT_FDCWD,
+        (long)
+            TFB_DIAGNOSTIC_FB_FD_PATH,
+        0
+    );
+}
+
+
+static int tfb_diagnostic_prepare_root(
+    void
+) {
+    tfb_diagnostic_cleanup_partial();
+
+    tfb_altroot_mkdir(
+        "/mnt",
+        0755
+    );
+
+    if (
+        !tfb_altroot_mkdir(
+            TFB_DIAGNOSTIC_ROOT,
+            0755
+        )
+    ) {
+        tfb_log(
+            "diagnostic=root-mkdir-failed"
+        );
+
+        return 0;
+    }
+
+    if (
+        tfb_altroot_mount(
+            "treeforge-diagnostic",
+            TFB_DIAGNOSTIC_ROOT,
+            "tmpfs",
+            0,
+            "mode=0755"
+        ) < 0
+    ) {
+        tfb_log(
+            "diagnostic=root-mount-failed"
+        );
+
+        return 0;
+    }
+
+    static const char *directories[] = {
+        "/mnt/treeforge-diagnostic/bin",
+        "/mnt/treeforge-diagnostic/system",
+        "/mnt/treeforge-diagnostic/system/bin",
+        "/mnt/treeforge-diagnostic/dev",
+        "/mnt/treeforge-diagnostic/proc",
+        "/mnt/treeforge-diagnostic/sys",
+        "/mnt/treeforge-diagnostic/config",
+        "/mnt/treeforge-diagnostic/tmp",
+        "/mnt/treeforge-diagnostic/.oldroot",
+        0
+    };
+
+    for (
+        int index = 0;
+        directories[index];
+        index++
+    ) {
+        if (
+            !tfb_altroot_mkdir(
+                directories[index],
+                (
+                    tfb_string_equal(
+                        directories[index],
+                        "/mnt/treeforge-diagnostic/tmp"
+                    )
+                    ? 01777
+                    : 0755
+                )
+            )
+        ) {
+            tfb_log(
+                "diagnostic=directory-create-failed"
+            );
+
+            tfb_diagnostic_cleanup_partial();
+            return 0;
+        }
+    }
+
+    static const char *bind_sources[] = {
+        "/dev",
+        "/proc",
+        "/sys",
+        "/config",
+        0
+    };
+
+    static const char *bind_targets[] = {
+        "/mnt/treeforge-diagnostic/dev",
+        "/mnt/treeforge-diagnostic/proc",
+        "/mnt/treeforge-diagnostic/sys",
+        "/mnt/treeforge-diagnostic/config",
+        0
+    };
+
+    for (
+        int index = 0;
+        bind_sources[index];
+        index++
+    ) {
+        if (
+            tfb_altroot_mount(
+                bind_sources[index],
+                bind_targets[index],
+                0,
+                TFB_MS_BIND
+                    | TFB_MS_REC,
+                0
+            ) < 0
+        ) {
+            tfb_log(
+                "diagnostic=bind-mount-failed"
+            );
+
+            tfb_diagnostic_cleanup_partial();
+            return 0;
+        }
+    }
+
+    if (
+        tfb_altroot_mount(
+            "treeforge-diagnostic-tmp",
+            "/mnt/treeforge-diagnostic/tmp",
+            "tmpfs",
+            0,
+            "mode=1777"
+        ) < 0
+    ) {
+        tfb_log(
+            "diagnostic=tmp-mount-failed"
+        );
+
+        tfb_diagnostic_cleanup_partial();
+        return 0;
+    }
+
+    long init_link =
+        tfb_syscall3(
+            SYS_SYMLINKAT,
+            (long)
+                TFB_DIAGNOSTIC_INIT,
+            AT_FDCWD,
+            (long)
+                "/mnt/"
+                "treeforge-diagnostic/"
+                "init"
+        );
+
+    long bin_shell =
+        tfb_syscall3(
+            SYS_SYMLINKAT,
+            (long)
+                TFB_DIAGNOSTIC_BUSYBOX,
+            AT_FDCWD,
+            (long)
+                "/mnt/"
+                "treeforge-diagnostic/"
+                "bin/sh"
+        );
+
+    long system_shell =
+        tfb_syscall3(
+            SYS_SYMLINKAT,
+            (long)
+                TFB_DIAGNOSTIC_BUSYBOX,
+            AT_FDCWD,
+            (long)
+                "/mnt/"
+                "treeforge-diagnostic/"
+                "system/bin/sh"
+        );
+
+    if (
+        init_link < 0
+        || bin_shell < 0
+        || system_shell < 0
+        || !tfb_probe_readable_path(
+            "/mnt/"
+            "treeforge-diagnostic/"
+            "init"
+        )
+        || !tfb_probe_readable_path(
+            "/mnt/"
+            "treeforge-diagnostic/"
+            "bin/sh"
+        )
+        || !tfb_probe_readable_path(
+            "/mnt/"
+            "treeforge-diagnostic/"
+            "system/bin/sh"
+        )
+    ) {
+        tfb_log(
+            "diagnostic=runtime-links-failed"
+        );
+
+        tfb_diagnostic_cleanup_partial();
+        return 0;
+    }
+
+    tfb_log(
+        "diagnostic=root-ready"
+    );
+
+    return 1;
+}
+
+
+static int tfb_diagnostic_prepare_fb_handoff(
+    void
+) {
+    if (!tfb_fb_active) {
+        tfb_log(
+            "diagnostic=fb-not-active"
+        );
+
+        return 0;
+    }
+
+    /*
+     * Open a second independent file description before the menu's
+     * mapping is released. Its read position therefore starts at zero,
+     * allowing the diagnostic PID1 to consume the framebuffer ABI.
+     */
+    long framebuffer_fd =
+        tfb_open(
+            TFB_FB_DEVICE_PATH,
+            O_RDWR
+        );
+
+    if (framebuffer_fd < 0) {
+        tfb_log(
+            "diagnostic=fb-handoff-open-failed"
+        );
+
+        return 0;
+    }
+
+    long metadata_fd =
+        tfb_syscall4(
+            SYS_OPENAT,
+            AT_FDCWD,
+            (long)
+                TFB_DIAGNOSTIC_FB_FD_PATH,
+            (
+                O_WRONLY
+                | O_CREAT
+                | O_TRUNC
+            ),
+            0600
+        );
+
+    if (metadata_fd < 0) {
+        tfb_close(
+            framebuffer_fd
+        );
+
+        tfb_log(
+            "diagnostic=fb-metadata-open-failed"
+        );
+
+        return 0;
+    }
+
+    int inherited_fd =
+        (int) framebuffer_fd;
+
+    long written =
+        tfb_syscall3(
+            SYS_WRITE,
+            metadata_fd,
+            (long) &inherited_fd,
+            (long)
+                sizeof(inherited_fd)
+        );
+
+    tfb_close(
+        metadata_fd
+    );
+
+    if (
+        written
+        != (long)
+            sizeof(inherited_fd)
+    ) {
+        tfb_close(
+            framebuffer_fd
+        );
+
+        tfb_syscall3(
+            SYS_UNLINKAT,
+            AT_FDCWD,
+            (long)
+                TFB_DIAGNOSTIC_FB_FD_PATH,
+            0
+        );
+
+        tfb_log(
+            "diagnostic=fb-metadata-write-failed"
+        );
+
+        return 0;
+    }
+
+    /*
+     * framebuffer_fd deliberately remains open and non-CLOEXEC.
+     * The diagnostic PID1 consumes it after pivot_root + execve.
+     */
+    tfb_log(
+        "diagnostic=fb-handoff-ready"
+    );
+
+    return 1;
+}
+
+
+__attribute__((noreturn))
+static void tfb_diagnostic_pivot_and_exec(
+    void
+) {
+    if (
+        tfb_altroot_mount(
+            0,
+            "/",
+            0,
+            TFB_MS_REC
+                | TFB_MS_PRIVATE,
+            0
+        ) < 0
+    ) {
+        tfb_transition_failure(
+            "diagnostic-root-private"
+        );
+    }
+
+    if (
+        tfb_syscall1(
+            SYS_CHDIR,
+            (long)
+                TFB_DIAGNOSTIC_ROOT
+        ) < 0
+    ) {
+        tfb_transition_failure(
+            "diagnostic-chdir-newroot"
+        );
+    }
+
+    tfb_log(
+        "diagnostic=pivot-begin"
+    );
+
+    if (
+        tfb_syscall2(
+            SYS_PIVOT_ROOT,
+            (long) ".",
+            (long) ".oldroot"
+        ) < 0
+    ) {
+        tfb_transition_failure(
+            "diagnostic-pivot-root"
+        );
+    }
+
+    tfb_syscall1(
+        SYS_CHDIR,
+        (long) "/"
+    );
+
+    tfb_syscall2(
+        SYS_UMOUNT2,
+        (long) "/.oldroot",
+        TFB_MNT_DETACH
+    );
+
+    tfb_log(
+        "diagnostic=pid1-exec"
+    );
+
+    char *diagnostic_argv[] = {
+        (char *) "/init",
+        0
+    };
+
+    char *diagnostic_envp[] = {
+        (char *)
+            "PATH=/bin:/system/bin",
+        (char *) "HOME=/",
+        (char *) "TERM=linux",
+        0
+    };
+
+    tfb_syscall3(
+        SYS_EXECVE,
+        (long) "/init",
+        (long) diagnostic_argv,
+        (long) diagnostic_envp
+    );
+
+    tfb_log(
+        "diagnostic=pid1-exec-failed"
+    );
+
+    for (;;) {
+        tfb_sleep_ms(
+            1000
+        );
+    }
+}
+
+
 static void tfb_menu_execute_action(
     int action,
     long *inputs,
     int created_input_directory,
     int *created_input_nodes
 ) {
+
+    if (
+        action
+        == TFB_ACTION_BOOT_DIAGNOSTICS
+    ) {
+        tfb_log(
+            "early-menu action=boot_diagnostics"
+        );
+
+        tfb_menu_status =
+            "PREPARING TREEFORGE DIAGNOSTICS";
+
+        if (
+            !tfb_diagnostic_prepare_root()
+        ) {
+            tfb_menu_status =
+                "DIAGNOSTIC ROOT PREP FAILED";
+
+            tfb_log(
+                "diagnostic=prepare-root-failed"
+            );
+
+            return;
+        }
+
+        if (
+            !tfb_diagnostic_prepare_fb_handoff()
+        ) {
+            tfb_menu_status =
+                "DIAGNOSTIC DISPLAY HANDOFF FAILED";
+
+            tfb_log(
+                "diagnostic=prepare-fb-failed"
+            );
+
+            tfb_diagnostic_cleanup_partial();
+            return;
+        }
+
+        /*
+         * Diagnostics becomes the active same-kernel userspace owner.
+         * Preserve the historical alternate-root marker as a
+         * compatibility signal for Bootstrap-owned ADB supervision.
+         */
+        tfb_create_presence_marker(
+            "/dev/treeforge-bootstrap-diagnostic-active"
+        );
+
+        tfb_create_presence_marker(
+            "/dev/treeforge-bootstrap-altroot-active"
+        );
+
+        /*
+         * The second framebuffer descriptor above survives this cleanup.
+         * This releases only the Boot Manager's own mapping/descriptor.
+         */
+        tfb_fb_menu_cleanup();
+
+        tfb_close_inputs(
+            inputs
+        );
+
+        tfb_diagnostic_pivot_and_exec();
+    }
+
+
+    if (
+        action
+        == TFB_ACTION_BOOT_ALTERNATE_OS
+    ) {
+        tfb_log(
+            "early-menu action=boot_alternate_os"
+        );
+
+        tfb_menu_status =
+            "PREPARING ALTERNATE OS";
+
+        if (
+            !tfb_altroot_prepare()
+        ) {
+            tfb_menu_status =
+                "ALTERNATE OS PREP FAILED";
+
+            tfb_log(
+                "altroot-storage=prepare-failed"
+            );
+
+            return;
+        }
+
+        /*
+         * The graphical menu is about to disappear permanently.
+         * Publish the retained alternate-root ownership marker before
+         * releasing display/input. ADB + USB deliberately remain alive
+         * across the same-kernel root transition.
+         */
+        tfb_create_presence_marker(
+            "/dev/treeforge-bootstrap-altroot-active"
+        );
+
+        tfb_fb_menu_cleanup();
+
+        tfb_close_inputs(
+            inputs
+        );
+
+        tfb_altroot_pivot_and_exec();
+    }
+
     tfb_log(
         tfb_menu_action_name(
             action
@@ -12346,6 +13427,9 @@ void _start(void) {
 
             MenuAction.BOOT_ALTERNATE_OS:
                 "TFB_ACTION_BOOT_ALTERNATE_OS",
+
+            MenuAction.BOOT_DIAGNOSTICS:
+                "TFB_ACTION_BOOT_DIAGNOSTICS",
 
             MenuAction.BOOT_ROOTED_ANDROID:
                 "TFB_ACTION_BOOT_ROOTED_ANDROID",

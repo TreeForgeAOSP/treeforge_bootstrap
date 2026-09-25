@@ -43,11 +43,18 @@
               "action": "not_implemented"
             },
             {
+              "id": "boot-diagnostics",
+              "label": "TreeForge Diagnostics",
+              "description": "Bootstrap-owned PID 1, display and ADB diagnostic runtime",
+              "icon": "none",
+              "action": "boot_diagnostics"
+            },
+            {
               "id": "boot-alternate",
               "label": "Alternate OS",
-              "description": "Not implemented: alternate OS inventory/handoff pending",
+              "description": "Boot the operating system installed on TreeForge OS",
               "icon": "none",
-              "action": "not_implemented"
+              "action": "boot_alternate_os"
             },
             {
               "id": "boot-recovery",

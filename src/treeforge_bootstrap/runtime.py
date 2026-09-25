@@ -72,7 +72,7 @@ RUNTIME_METADATA = (
 
 
 #
-# Hardware-accepted v1 frozen runtime identities.
+# Hardware-accepted v1.0b3 frozen runtime identities.
 #
 # These identify the exact payload published by the TreeForge Bootstrap
 # runtime provider. They intentionally do not require the canonical
@@ -80,25 +80,25 @@ RUNTIME_METADATA = (
 # verify_runtime().
 #
 FROZEN_RUNTIME_CPIO_SHA256 = (
-    "b35a6497880950cc0eb28bffc60077f6"
-    "4b7b05621fb8cc42b25773dedbdbce35"
+    "bb6fcd24b5631b9fc8fe9faf0cd0dad1"
+    "4be84c30892a65c41e6d3d27346ce216"
 )
 
-FROZEN_RUNTIME_CPIO_BYTES = 15_566_528
+FROZEN_RUNTIME_CPIO_BYTES = 15_580_184
 
 FROZEN_RUNTIME_LZ4_SHA256 = (
-    "ee0deacd5551109330491451034d55b4"
-    "0264483b11b01f4b82eae05155eb6095"
+    "e2edd9d62e634880e223a00994e10741"
+    "94657154b564d42988161b00640b08dd"
 )
 
-FROZEN_RUNTIME_LZ4_BYTES = 7_738_213
+FROZEN_RUNTIME_LZ4_BYTES = 7_744_040
 
 FROZEN_RUNTIME_MENU_SHA256 = (
-    "9e90410312a7f003fef1b3912904f303"
-    "5cbbd115fba7511beae274e7558dd110"
+    "7402a0334ca44089b14af0d8b2636029"
+    "3629936ca0c50fd105a9fd34882949de"
 )
 
-FROZEN_RUNTIME_MENU_BYTES = 10_206_508
+FROZEN_RUNTIME_MENU_BYTES = 10_220_161
 
 def _sha256(
     path: Path,
@@ -278,6 +278,108 @@ def _copy_external_provider(
     )
 
 
+
+def _compile_diagnostic_init(
+    clang: Path,
+    stage: Path,
+) -> Path:
+    source = (
+        INITRAMFS_ROOT.parent
+        / "src"
+        / "diagnostic_init.c"
+    )
+
+    if not source.is_file():
+        raise TreeForgeBootstrapRuntimeError(
+            "diagnostic PID1 source is missing: "
+            f"{source}"
+        )
+
+    output = (
+        stage
+        / "system"
+        / "bin"
+        / "treeforge-diagnostic-init"
+    )
+
+    output.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    command = [
+        str(clang),
+        "--target=aarch64-linux-gnu",
+        "-fuse-ld=lld",
+        "-Os",
+        "-ffreestanding",
+        "-fno-builtin",
+        "-fno-stack-protector",
+        "-fno-pic",
+        "-fno-pie",
+        "-nostdlib",
+        "-static",
+        "-Wl,-e,_start",
+        "-Wl,--build-id=none",
+        "-Wl,-z,max-page-size=4096",
+        str(source),
+        "-o",
+        str(output),
+    ]
+
+    completed = subprocess.run(
+        command,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+
+    if completed.returncode != 0:
+        raise TreeForgeBootstrapRuntimeError(
+            "diagnostic PID1 compile failed:\n"
+            + completed.stdout
+        )
+
+    if not output.is_file():
+        raise TreeForgeBootstrapRuntimeError(
+            "diagnostic PID1 compiler produced no output"
+        )
+
+    data = output.read_bytes()
+
+    required = (
+        b"TREEFORGE_DIAGNOSTIC_INIT_ENTERED=1",
+        b"TREEFORGE_DIAGNOSTIC_NATIVE_PID1_V1=1",
+        b"TREEFORGE_DIAGNOSTIC_PID1_READY=1",
+        b"TREEFORGE_DIAGNOSTIC_FB_ACTIVE=1",
+        b"BOOTSTRAP B3 CANARY",
+    )
+
+    if (
+        len(data) < 20
+        or data[:4] != b"\x7fELF"
+        or int.from_bytes(
+            data[18:20],
+            "little",
+        ) != 183
+    ):
+        raise TreeForgeBootstrapRuntimeError(
+            "diagnostic PID1 is not AArch64 ELF"
+        )
+
+    for marker in required:
+        if marker not in data:
+            raise TreeForgeBootstrapRuntimeError(
+                "diagnostic PID1 marker missing: "
+                + marker.decode(
+                    "ascii"
+                )
+            )
+
+    return output
+
+
 def _install_root_busybox(
     stage: Path,
 ) -> None:
@@ -378,6 +480,11 @@ def _stage_runtime() -> Path:
         )
 
     _compile_adb_service(
+        clang,
+        stage,
+    )
+
+    _compile_diagnostic_init(
         clang,
         stage,
     )
