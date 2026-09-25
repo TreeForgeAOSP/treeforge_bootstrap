@@ -4,9 +4,9 @@ TreeForge Bootstrap is an early-boot runtime and graphical boot manager for the 
 
 The current development target is **Android 15 on `tangorpro`**.
 
-TreeForge Bootstrap is currently in **beta**. The first release of the redesigned Bootstrap architecture is:
+TreeForge Bootstrap is currently in **beta**. The current release line of the redesigned Bootstrap architecture is:
 
-`v1.0b1`
+`v1.0b2`
 
 ## Current status
 
@@ -28,6 +28,8 @@ Working and accepted in the current beta:
 * TreeForge OS partition geometry reporting.
 * Deterministic Bootstrap runtime construction.
 * Reproducible runtime provider packaging.
+* Deterministic host-realizer provider packaging.
+* Provider-local realization without a developer Bootstrap or kernel checkout.
 * Native realization of the complete 15-image device family.
 * AVB graph verification.
 * Preserve-compatible-trust AVB policy.
@@ -41,7 +43,7 @@ The following surfaces intentionally remain incomplete:
 * Dedicated Recovery runtime.
 * Root installation and rooted boot workflows.
 * Final multiboot operating-system installation workflow.
-* Final integration with Pixel Partitioner.
+* Final Pixel Partitioner installation-flow integration.
 
 These incomplete entries remain visible where useful, but are marked as not implemented rather than pretending to be functional.
 
@@ -109,9 +111,13 @@ Android handoff:   Slot A
 
 Support should not be assumed for another device or Android release unless it has its own validated provider and realization contract.
 
-## Release provider
+## Release providers
 
-The `v1.0b1` release publishes the accepted Bootstrap runtime provider:
+`v1.0b2` defines two separate TreeForge Bootstrap provider roles.
+
+### Runtime provider
+
+The accepted runtime provider remains:
 
 ```text
 treeforge-bootstrap-tangorpro-android15-runtime.tar.xz
@@ -123,7 +129,7 @@ SHA-256:
 c22c69a7bbcde289d2d31fbcf4ac4c764939bcc10a1d733158de4a45529998ad
 ```
 
-The provider contains:
+The runtime provider contains:
 
 ```text
 payload/initramfs.cpio
@@ -146,7 +152,43 @@ treeforge-menu
 9e90410312a7f003fef1b3912904f3035cbbd115fba7511beae274e7558dd110
 ```
 
-The provider is intentionally a **runtime provider**. It is not a complete installer and it does not contain private AVB signing keys.
+The runtime provider is intentionally unsigned at the final device-image boundary. It does not contain private AVB signing keys.
+
+### Host realizer provider
+
+`v1.0b2` adds the host-side realization provider:
+
+```text
+treeforge-bootstrap-tangorpro-android15-realizer.tar.xz
+```
+
+The host realizer contains the committed Bootstrap host implementation and provider metadata required to run `verify-frozen-runtime` and `realize-family`.
+
+It does **not** bundle:
+
+```text
+the Bootstrap runtime payload
+the canonical Google init_boot seed
+the Bootstrap adbd build provider
+private AVB keys
+the AOSP AVB test key
+a TreeForge Bootstrap development checkout
+a TreeForge kernel development checkout
+```
+
+The runtime provider remains a separate pinned dependency.
+
+At consumption time, the host realizer receives:
+
+```text
+accepted runtime provider
+validated device-family backup
+consumer-owned AVB keyset
+```
+
+and produces the verified 15-image Bootstrap family.
+
+The host-realizer archive SHA-256 is derived only after the final release metadata commit is built. It is therefore published with the release artifacts rather than embedded into this source tree, because the archive itself contains the tracked release contract.
 
 ## Reproduction model
 
@@ -166,7 +208,9 @@ byte-identical Bootstrap runtime
 
 The canonical Google `init_boot` ramdisk seed is an external build input.
 
-It is required when reconstructing and validating the runtime from source, but it is **not tracked or redistributed by TreeForge**.
+It is required when reconstructing and deeply validating the runtime from source, but it is **not tracked or redistributed by TreeForge**.
+
+The released runtime plus host-realizer path does not require that Google seed when realizing an accepted device family.
 
 The accepted canonical seed identity is:
 
@@ -278,12 +322,12 @@ Some commands require pinned external providers or a complete device-family inpu
 
 Pixel Partitioner is the intended consumer of TreeForge Bootstrap for permanent installation.
 
-The production integration is being migrated away from historical embedded Bootstrap code and toward published Bootstrap providers.
-
-The target production dependency model is:
+The accepted production dependency boundary is:
 
 ```text
-published TreeForge Bootstrap provider
+published TreeForge Bootstrap runtime provider
+        +
+published TreeForge Bootstrap host realizer
         +
 validated Pixel Partitioner device backup
         +
@@ -293,25 +337,54 @@ Pixel Partitioner AVB keyset
 TreeForge Bootstrap realization
         |
         v
+verified 15-image Bootstrap family
+        |
+        v
 Pixel Partitioner install plan
         |
         v
 authorized device installation
 ```
 
-Pixel Partitioner should not depend on a developer's local `treeforge_bootstrap` or `treeforge_kernel` checkout for normal production operation.
+The host-side provider boundary is accepted for `v1.0b2`.
 
-That provider-only host integration is still being completed after `v1.0b1`.
+It has been verified from independently extracted provider artifacts without a developer `treeforge_bootstrap` checkout, without a developer `treeforge_kernel` checkout, without the Google canonical seed, and without an AOSP checkout.
+
+Pixel Partitioner still owns the remaining installation-side integration: provider acquisition/materialization, install-plan derivation, authorization, partition writes, slot state, and final device verification.
 
 ## Host realizer provider status
 
-A self-contained host-side Bootstrap realizer provider is **not part of `v1.0b1`**.
+The self-contained host-side Bootstrap realizer is accepted for the `v1.0b2` release line.
 
-The first packaging experiment correctly demonstrated that the current canonical runtime verification path still requires the external Google `init_boot` seed.
+The accepted provider boundary separates runtime payload from host realization logic:
 
-TreeForge will not solve that by redistributing the Google seed.
+```text
+runtime provider
+    -> accepted initramfs/menu payload
 
-The host-provider boundary will instead be completed in a later beta so Pixel Partitioner can invoke the published realization implementation without depending on a developer checkout and without bundling non-redistributable inputs.
+host realizer provider
+    -> frozen-runtime verification
+    -> boot/init_boot realization
+    -> AVB graph realization and verification
+    -> complete 15-image family
+```
+
+The realizer consumes the runtime provider as a separate dependency and consumes AVB private keys only from the downstream consumer's supplied keyset.
+
+The accepted isolated-provider test reproduced the hardware-accepted identities:
+
+```text
+boot.img
+59d9103f7c9e343a96af6d37f9307f4610db7d228976b9d67ac59fab00bcf20b
+
+init_boot.img
+be49250687786bea3ac14e0d1744fddb6f3e51ba34d4dd19778eb5900a5def80
+
+manifest.json
+0c10b6d8e12a38183129cc64ff57c00eb4794c2f596af5c6b1f93bcd203551c9
+```
+
+The provider does not redistribute the Google canonical seed, the adbd build provider, AOSP test signing keys, or consumer AVB private keys.
 
 ## Safety model
 
@@ -360,10 +433,10 @@ Generated output and private provider state are not source and should not be com
 
 ## Current release
 
-Current published prerelease:
+Current beta release line:
 
 ```text
-v1.0b1
+v1.0b2
 ```
 
 Repository:
@@ -372,4 +445,6 @@ Repository:
 TreeForgeAOSP/treeforge_bootstrap
 ```
 
-`v1.0b1` is intentionally a beta. The Bootstrap runtime itself is hardware accepted and reproducible, but the broader multiboot and provider-only Pixel Partitioner integration remain active development work.
+`v1.0b2` keeps the hardware-accepted runtime unchanged and adds the accepted self-contained host-realizer provider boundary.
+
+The remaining Pixel Partitioner work is installation-side integration of those published providers; broader alternate-OS and multiboot workflows remain active development work.

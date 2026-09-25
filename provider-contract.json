@@ -37,12 +37,50 @@
       "runtime_sha256": "625fbc447f0f1f9490aa0b72f88dd34f0f7e84c93fe80484288336acda28d53a"
     }
   },
+  "realizer_artifact": {
+    "architecture": "x86_64-host",
+    "bundled_inputs": {
+      "adb_build_provider": false,
+      "aosp_checkout_test_key": false,
+      "google_canonical_seed": false,
+      "private_avb_keys": false
+    },
+    "checkout_dependencies": {
+      "aosp_checkout": false,
+      "treeforge_bootstrap_development_checkout": false,
+      "treeforge_kernel_development_checkout": false
+    },
+    "consumer_inputs": [
+      "validated-device-family",
+      "avb-keyset"
+    ],
+    "contains_runtime_payload": false,
+    "deterministic_archive": true,
+    "device": "tangorpro",
+    "kind": "host-realizer",
+    "name": "treeforge-bootstrap-tangorpro-android15-realizer.tar.xz",
+    "platform": "android-15",
+    "runtime_dependency": {
+      "name": "treeforge-bootstrap-tangorpro-android15-runtime.tar.xz",
+      "required": true,
+      "sha256": "c22c69a7bbcde289d2d31fbcf4ac4c764939bcc10a1d733158de4a45529998ad"
+    },
+    "sha256_state": "derived-from-final-release-build"
+  },
   "repository": "TreeForgeAOSP/treeforge_bootstrap",
   "reproduction": {
     "byte_identical_reproduction": true,
     "contract": "source-plus-pinned-providers",
     "hardware_accepted": true,
+    "host_realizer_provider_accepted": true,
+    "host_realizer_requires_adb_build_provider": false,
+    "host_realizer_requires_aosp_checkout": false,
+    "host_realizer_requires_bootstrap_checkout": false,
+    "host_realizer_requires_google_seed": false,
+    "host_realizer_requires_kernel_checkout": false,
+    "host_realizer_requires_runtime_json": false,
     "provider_archive_sha256": "c22c69a7bbcde289d2d31fbcf4ac4c764939bcc10a1d733158de4a45529998ad",
+    "provider_only_realization": true,
     "realized_boot_sha256": "59d9103f7c9e343a96af6d37f9307f4610db7d228976b9d67ac59fab00bcf20b",
     "realized_init_boot_sha256": "be49250687786bea3ac14e0d1744fddb6f3e51ba34d4dd19778eb5900a5def80",
     "realized_manifest_sha256": "0c10b6d8e12a38183129cc64ff57c00eb4794c2f596af5c6b1f93bcd203551c9",
@@ -72,5 +110,5 @@
     "signed_image": false
   },
   "schema": 1,
-  "status": "v1-hardware-accepted-reproducible"
+  "status": "v1.0b2-runtime-realizer-release-contract"
 }
