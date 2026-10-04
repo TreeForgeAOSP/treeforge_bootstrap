@@ -9051,59 +9051,66 @@ static int tfb_altroot_prepare(
      * completely native; BusyBox stays in Bootstrap's retained /dev
      * runtime and is not part of the alternate rootfs payload.
      */
+
+    /*
+     * TFB_ALTROOT_NATIVE_SHELL_PRESERVE_V1
+     *
+     * Preserve a native operating system's shell.
+     * Supply retained BusyBox only when a shell is absent.
+     */
     const char *diagnostic_busybox =
         TFB_ALTROOT_LOADER_BUSYBOX;
 
-    tfb_syscall3(
-        SYS_UNLINKAT,
-        AT_FDCWD,
-        (long)
-            "/mnt/treeforge-altroot/bin/sh",
-        0
-    );
-
-    tfb_syscall3(
-        SYS_UNLINKAT,
-        AT_FDCWD,
-        (long)
-            "/mnt/treeforge-altroot/system/bin/sh",
-        0
-    );
-
-    long alt_bin_shell =
-        tfb_syscall3(
-            SYS_SYMLINKAT,
-            (long) diagnostic_busybox,
-            AT_FDCWD,
-            (long)
-                "/mnt/treeforge-altroot/bin/sh"
-        );
-
-    long alt_system_shell =
-        tfb_syscall3(
-            SYS_SYMLINKAT,
-            (long) diagnostic_busybox,
-            AT_FDCWD,
-            (long)
-                "/mnt/treeforge-altroot/system/bin/sh"
-        );
-
     if (
-        alt_bin_shell < 0
-        || alt_system_shell < 0
-        || !tfb_probe_readable_path(
+        !tfb_probe_readable_path(
             "/mnt/treeforge-altroot/bin/sh"
         )
-        || !tfb_probe_readable_path(
+    ) {
+        long rc = tfb_syscall3(
+            SYS_SYMLINKAT,
+            (long) diagnostic_busybox,
+            AT_FDCWD,
+            (long) "/mnt/treeforge-altroot/bin/sh"
+        );
+
+        if (
+            rc < 0
+            || !tfb_probe_readable_path(
+                "/mnt/treeforge-altroot/bin/sh"
+            )
+        ) {
+            tfb_log("altroot-shell=fallback-failed");
+            tfb_altroot_cleanup_partial();
+            return 0;
+        }
+
+        tfb_log("altroot-shell=bootstrap-fallback");
+    } else {
+        tfb_log("altroot-native-shell=preserved");
+    }
+
+    if (
+        !tfb_probe_readable_path(
             "/mnt/treeforge-altroot/system/bin/sh"
         )
     ) {
-        tfb_log(
-            "altroot-test=diagnostic-shell-compat-failed"
+        long rc = tfb_syscall3(
+            SYS_SYMLINKAT,
+            (long) diagnostic_busybox,
+            AT_FDCWD,
+            (long) "/mnt/treeforge-altroot/system/bin/sh"
         );
 
-        tfb_altroot_cleanup_partial();
-        return 0;
+        if (
+            rc < 0
+            || !tfb_probe_readable_path(
+                "/mnt/treeforge-altroot/system/bin/sh"
+            )
+        ) {
+            tfb_log("altroot-adb-shell=failed");
+            tfb_altroot_cleanup_partial();
+            return 0;
+        }
     }
 
     tfb_log(
@@ -14021,3 +14028,38 @@ __all__ = (
     "TreeForgeDispatcherBuilder",
     "TreeForgeDispatcherError",
 )
+
+
+# Only ChromiumOS receives the versioned touchscreen resolver.
+from .paths import BUILD_PROFILE as _tfb_profile
+from .paths import REPOSITORY_ROOT as _tfb_root
+
+if _tfb_profile == "treeforge-chromiumos":
+    import hashlib as _tfb_hashlib
+    import json as _tfb_json
+
+    _tfb_overlay = _tfb_json.loads(
+        (
+            _tfb_root
+            / "profiles/treeforge-chromiumos/dispatcher-overlay.json"
+        ).read_text()
+    )
+    _tfb_original = TreeForgeDispatcherBuilder._SOURCE
+
+    def _tfb_sha(text):
+        return _tfb_hashlib.sha256(text.encode()).hexdigest()
+
+    if _tfb_sha(_tfb_original) != _tfb_overlay["base_sha256"]:
+        raise TreeForgeDispatcherError("Dispatcher base changed")
+
+    if _tfb_original.count(_tfb_overlay["before"]) != 1:
+        raise TreeForgeDispatcherError("Touchscreen anchor changed")
+
+    _tfb_updated = _tfb_original.replace(
+        _tfb_overlay["before"], _tfb_overlay["after"], 1
+    )
+
+    if _tfb_sha(_tfb_updated) != _tfb_overlay["variant_sha256"]:
+        raise TreeForgeDispatcherError("ChromiumOS dispatcher mismatch")
+
+    TreeForgeDispatcherBuilder._SOURCE = _tfb_updated

@@ -39,6 +39,7 @@ from .avb_keyset import (
 
 from .hardware import hardware_preflight
 from .interactive import interactive
+from .paths import BUILD_PROFILE
 
 
 class TreeForgeBootstrapBuildError(
@@ -242,7 +243,25 @@ def main() -> None:
         ),
     )
 
+    parser.add_argument(
+        "--profile",
+        choices=("treeforge-default", "treeforge-chromiumos"),
+        default=BUILD_PROFILE,
+    )
+
     args = parser.parse_args()
+
+    if args.profile != BUILD_PROFILE:
+        parser.error("Build-profile mismatch")
+
+    if args.profile == "treeforge-chromiumos":
+        if args.command not in (
+            "doctor", "build", "verify", "image", "verify-image"
+        ):
+            parser.error(
+                "ChromiumOS supports runtime and standalone "
+                "init_boot development commands only"
+            )
 
     if args.command is None:
         interactive()
@@ -261,9 +280,17 @@ def main() -> None:
     elif args.command == "verify-provider":
         verify_provider()
     elif args.command == "image":
-        build_image()
+        if BUILD_PROFILE == "treeforge-chromiumos":
+            from .chromiumos_init_boot import build
+            build()
+        else:
+            build_image()
     elif args.command == "verify-image":
-        verify_image()
+        if BUILD_PROFILE == "treeforge-chromiumos":
+            from .chromiumos_init_boot import verify
+            verify()
+        else:
+            verify_image()
     elif args.command == "realize-family":
         if args.input_family is None:
             parser.error(

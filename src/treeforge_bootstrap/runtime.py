@@ -12,6 +12,7 @@ from .canonical_initramfs import (
     validate_canonical_initramfs,
 )
 from .newc import read_newc_archive
+from .paths import BUILD_PROFILE
 from .paths import (
     INITRAMFS_ROOT,
     OUT,
@@ -79,26 +80,17 @@ RUNTIME_METADATA = (
 # Google init_boot seed: reconstruction verification remains the job of
 # verify_runtime().
 #
-FROZEN_RUNTIME_CPIO_SHA256 = (
-    "bb6fcd24b5631b9fc8fe9faf0cd0dad1"
-    "4be84c30892a65c41e6d3d27346ce216"
-)
+FROZEN_RUNTIME_CPIO_SHA256 = "f06b2cdc81f592cfdfc6bbd928af65c4e53ab3990e8aad1a56193029b557bd65"
 
-FROZEN_RUNTIME_CPIO_BYTES = 15_580_184
+FROZEN_RUNTIME_CPIO_BYTES = 15_580_296
 
-FROZEN_RUNTIME_LZ4_SHA256 = (
-    "e2edd9d62e634880e223a00994e10741"
-    "94657154b564d42988161b00640b08dd"
-)
+FROZEN_RUNTIME_LZ4_SHA256 = "6c8573046733303d36f6ffaeb208ff30a527eaf1fbf68f7490f0dd6c540ba9bf"
 
-FROZEN_RUNTIME_LZ4_BYTES = 7_744_040
+FROZEN_RUNTIME_LZ4_BYTES = 7_744_109
 
-FROZEN_RUNTIME_MENU_SHA256 = (
-    "7402a0334ca44089b14af0d8b2636029"
-    "3629936ca0c50fd105a9fd34882949de"
-)
+FROZEN_RUNTIME_MENU_SHA256 = "220823f934d3933c052a3397ea7d87d8c5407275b19f75745150385fce80100c"
 
-FROZEN_RUNTIME_MENU_BYTES = 10_220_161
+FROZEN_RUNTIME_MENU_BYTES = 10_220_273
 
 def _sha256(
     path: Path,
@@ -734,6 +726,10 @@ def build_runtime() -> Path:
         },
     }
 
+    if BUILD_PROFILE == "treeforge-chromiumos":
+        metadata["profile_id"] = BUILD_PROFILE
+
+
     RUNTIME_METADATA.write_text(
         json.dumps(
             metadata,
@@ -782,6 +778,12 @@ def verify_frozen_runtime() -> Path:
     realization. Full source/reconstruction verification remains in
     verify_runtime().
     """
+
+    if BUILD_PROFILE == "treeforge-chromiumos":
+        raise TreeForgeBootstrapRuntimeError(
+            "ChromiumOS release identity has not been frozen"
+        )
+
 
     expected = (
         (
@@ -869,6 +871,10 @@ def verify_runtime() -> Path:
             encoding="utf-8"
         )
     )
+
+    if metadata.get("profile_id", "treeforge-default") != BUILD_PROFILE:
+        raise TreeForgeBootstrapRuntimeError("Runtime profile mismatch")
+
 
     runtime = metadata[
         "runtime"

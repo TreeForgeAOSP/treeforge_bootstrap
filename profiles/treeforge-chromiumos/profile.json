@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "id": "treeforge-chromiumos",
+  "device": "tangorpro",
+  "kernel_profile": "treeforge-chromiumos",
+  "menu_profile": "profiles/treeforge-default.json",
+  "release_state": "development",
+  "frozen_runtime": false
+}
