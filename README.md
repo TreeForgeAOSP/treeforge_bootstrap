@@ -6,8 +6,8 @@ The current supported target is the Google Pixel Tablet (`tangorpro`) using Andr
 
 ## Versions
 
-- TreeForge Bootstrap: `v1.0b4`
-- TreeForge Boot Manager: `v1.0b1`
+- TreeForge Bootstrap: `v1.0b5`
+- TreeForge Boot Manager: `v1.0b2`
 - TreeForge Runtime ABI: `v1.0b1`
 
 ## Supported target
@@ -70,7 +70,7 @@ Use `./treeforge-bootstrap --help` for the complete command-line interface.
 
 TreeForge Bootstrap releases reusable provider artifacts rather than an installation-specific `init_boot.img`.
 
-The `v1.0b4` release provides:
+The `v1.0b5` release provides:
 
 ```text
 provider-contract.json
@@ -90,7 +90,7 @@ The update manifest provides the machine-readable Bootstrap update contract used
 
 ## Kernel dependency
 
-Bootstrap `v1.0b4` uses TreeForge Kernel `r0.94-v1.0b1`.
+Bootstrap `v1.0b5` uses TreeForge Kernel `r0.94-v1.0b1`.
 
 The matching kernel artifact is acquired and verified by the Bootstrap kernel provider.
 

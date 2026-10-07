@@ -76,33 +76,19 @@
       {
         "id": "pixel-partitioner",
         "label": "Pixel Partitioner",
-        "description": "Working: device maintenance interface",
+        "description": "Authorize host maintenance and view live status",
         "icon": "none",
         "submenu": {
           "id": "pixel-partitioner-page",
           "title": "Pixel Partitioner",
-          "subtitle": "Host-managed storage and partition controls",
-          "default_entry": "pp-slot-a",
+          "subtitle": "Authorized host maintenance - live operation status",
+          "default_entry": "pixel-partitioner-back",
           "timeout_ms": 0,
           "entries": [
             {
-              "id": "pp-slot-a",
-              "label": "Target Slot A",
-              "description": "Working: select Slot A as the host boot target",
-              "icon": "none",
-              "action": "set_boot_target_slot_a"
-            },
-            {
-              "id": "pp-slot-b",
-              "label": "Target Slot B",
-              "description": "Working: select Slot B as the host boot target",
-              "icon": "none",
-              "action": "set_boot_target_slot_b"
-            },
-            {
               "id": "pixel-partitioner-back",
               "label": "Back",
-              "description": "Return to Home",
+              "description": "End Pixel Partitioner authorization and return Home",
               "icon": "none",
               "action": "back"
             }

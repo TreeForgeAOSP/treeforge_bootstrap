@@ -280,7 +280,7 @@ int memcmp(
 /*
  * TFB_PIXEL_PARTITIONER_SERVICE_V1
  *
- * Entering the Pixel Partitioner submenu is the explicit authorization
+ * Entering the Pixel Partitioner status page is the explicit authorization
  * boundary for the host-side Pixel Partitioner CLI.
  */
 #define TFB_PP_READY_MARKER \
@@ -376,6 +376,19 @@ static int tfb_boot_target_slot = 0;
 #define TFB_UI_CONTENT_TOP 300U
 #define TFB_UI_CONTENT_BOTTOM 1430U
 #define TFB_UI_ROW_GAP 28U
+
+/*
+ * TFB_PP_SHARED_PANEL_GEOMETRY_V1
+ *
+ * Pixel Partitioner is still a normal submenu, but its
+ * single Back action is pinned below the live-log panel.
+ *
+ * tfb_ui_menu_geometry() owns these coordinates so drawing
+ * and touchscreen hit-testing consume the same rectangle.
+ */
+#define TFB_PP_BACK_Y 1235U
+#define TFB_PP_BACK_HEIGHT 170U
+#define TFB_PP_REFRESH_MS 250U
 #define KEY_VOLUMEDOWN 114
 #define KEY_VOLUMEUP 115
 #define KEY_POWER 116
@@ -2641,11 +2654,105 @@ static const char *tfb_adb_display_text(
 }
 
 
+
+static char tfb_pp_live_status[
+    256
+];
+
+
+static int tfb_pp_read_status_text(
+    const char *path,
+    char *buffer,
+    unsigned long capacity
+) {
+    long fd;
+    long count;
+
+    if (
+        !path
+        || !buffer
+        || capacity < 2
+    ) {
+        return 0;
+    }
+
+    buffer[0] = 0;
+
+    fd = tfb_open(
+        path,
+        O_RDONLY
+        | O_NONBLOCK
+    );
+
+    if (fd < 0) {
+        return 0;
+    }
+
+    count = tfb_syscall3(
+        SYS_READ,
+        fd,
+        (long) buffer,
+        (long) (
+            capacity - 1
+        )
+    );
+
+    tfb_close(
+        fd
+    );
+
+    if (count <= 0) {
+        buffer[0] = 0;
+        return 0;
+    }
+
+    if (
+        (unsigned long) count
+        >= capacity
+    ) {
+        count = (
+            (long) capacity
+            - 1
+        );
+    }
+
+    buffer[count] = 0;
+
+    while (
+        count > 0
+        && (
+            buffer[count - 1] == '\n'
+            || buffer[count - 1] == '\r'
+        )
+    ) {
+        count--;
+        buffer[count] = 0;
+    }
+
+    return (
+        count > 0
+    );
+}
+
+
 static const char *tfb_menu_status_line(
     const struct tfb_menu_page *page,
     u32 elapsed_ms,
     int timeout_fired
 ) {
+
+    if (
+        tfb_pp_read_status_text(
+            "/dev/treeforge-bootstrap-pixel-partitioner-status",
+            tfb_pp_live_status,
+            sizeof(
+                tfb_pp_live_status
+            )
+        )
+    ) {
+        return tfb_pp_live_status;
+    }
+
     if (tfb_menu_status) {
         return tfb_menu_status;
     }
@@ -3559,6 +3666,48 @@ static int tfb_ui_menu_geometry(
     if (item_count <= 0) {
         return 0;
     }
+
+    /*
+     * TFB_PIXEL_PARTITIONER_TOUCH_BACK_SYNC_V1
+     *
+     * Pixel Partitioner has one ordinary actionable entry: Back.
+     *
+     * The live-log renderer places that card at the bottom of the
+     * right panel.  Put the canonical menu geometry there as well,
+     * so both framebuffer rendering and tfb_menu_touch_row() use
+     * exactly the same rectangle.
+     */
+    if (
+        page->title
+        && tfb_string_equal(
+            page->title,
+            "Pixel Partitioner"
+        )
+    ) {
+        geometry->x =
+            TFB_UI_MENU_X;
+
+        geometry->y =
+            TFB_PP_BACK_Y;
+
+        geometry->width = (
+            TFB_UI_LOGICAL_WIDTH
+            - TFB_UI_MENU_X
+            - TFB_UI_MENU_RIGHT_MARGIN
+        );
+
+        geometry->row_height =
+            TFB_PP_BACK_HEIGHT;
+
+        geometry->row_gap =
+            0U;
+
+        geometry->item_count =
+            item_count;
+
+        return 1;
+    }
+
 
     /*
      * TFB_COMPONENT_VERSIONS_TOUCH_BACK_V3
@@ -5562,6 +5711,677 @@ static void tfb_ui_alternate_inventory(
 }
 
 
+
+/*
+ * TFB_PIXEL_PARTITIONER_LIVE_LOG_PANEL_V1
+ *
+ * Pixel Partitioner remains an ordinary Boot Manager submenu.
+ *
+ * Only its right-hand content region receives a specialized
+ * read-only presentation:
+ *
+ *     HOST
+ *     LIVE LOG
+ *     Back
+ *
+ * The left Boot Manager information panels, global header,
+ * title/subtitle, normal input handling, and submenu stack
+ * remain unchanged.
+ *
+ * The READY marker is the authorization boundary.
+ *
+ * The status/log files are presentation-only input and their
+ * contents are never executed.
+ */
+static int tfb_pixel_partitioner_page(
+    const struct tfb_menu_page *page
+);
+
+
+#define TFB_PP_LOG_PATH \
+    "/dev/treeforge-bootstrap-pixel-partitioner-log"
+
+#define TFB_PP_LOG_BUFFER_CAPACITY 4096U
+#define TFB_PP_LOG_MAX_LINES 16
+#define TFB_PP_LOG_LINE_CAPACITY 96U
+
+
+static char tfb_pp_log_buffer[
+    TFB_PP_LOG_BUFFER_CAPACITY
+];
+
+
+static int tfb_pp_prefix(
+    const char *value,
+    const char *prefix
+) {
+    if (
+        !value
+        || !prefix
+    ) {
+        return 0;
+    }
+
+    usize index = 0;
+
+    while (
+        prefix[index]
+        != '\0'
+    ) {
+        if (
+            value[index]
+            != prefix[index]
+        ) {
+            return 0;
+        }
+
+        index++;
+    }
+
+    return 1;
+}
+
+
+static void tfb_pp_copy_log_text(
+    char *output,
+    usize capacity,
+    const char *prefix,
+    const char *message
+) {
+    if (
+        !output
+        || capacity < 2
+    ) {
+        return;
+    }
+
+    usize position = 0;
+
+    if (prefix) {
+        for (
+            usize index = 0;
+            prefix[index] != '\0'
+                && position + 1 < capacity;
+            index++
+        ) {
+            output[
+                position++
+            ] = prefix[index];
+        }
+    }
+
+    if (message) {
+        for (
+            usize index = 0;
+            message[index] != '\0'
+                && position + 1 < capacity;
+            index++
+        ) {
+            unsigned char value = (
+                (unsigned char)
+                message[index]
+            );
+
+            if (
+                value == '\r'
+                || value == '\n'
+            ) {
+                break;
+            }
+
+            output[
+                position++
+            ] = (
+                value >= 0x20
+                && value <= 0x7e
+                ? (char) value
+                : '?'
+            );
+        }
+    }
+
+    output[position] =
+        '\0';
+}
+
+
+static u32 tfb_pp_format_log_line(
+    const char *source,
+    char *output,
+    usize capacity,
+    u32 foreground,
+    u32 accent,
+    u32 green,
+    u32 warning
+) {
+    if (!source) {
+        tfb_pp_copy_log_text(
+            output,
+            capacity,
+            "[INFO] ",
+            ""
+        );
+
+        return foreground;
+    }
+
+    if (
+        tfb_pp_prefix(
+            source,
+            "PASS|"
+        )
+    ) {
+        tfb_pp_copy_log_text(
+            output,
+            capacity,
+            "[PASS] ",
+            source + 5
+        );
+
+        return green;
+    }
+
+    if (
+        tfb_pp_prefix(
+            source,
+            "RUNNING|"
+        )
+    ) {
+        tfb_pp_copy_log_text(
+            output,
+            capacity,
+            "[RUN ] ",
+            source + 8
+        );
+
+        return accent;
+    }
+
+    if (
+        tfb_pp_prefix(
+            source,
+            "FAIL|"
+        )
+    ) {
+        tfb_pp_copy_log_text(
+            output,
+            capacity,
+            "[FAIL] ",
+            source + 5
+        );
+
+        return warning;
+    }
+
+    if (
+        tfb_pp_prefix(
+            source,
+            "WARN|"
+        )
+    ) {
+        tfb_pp_copy_log_text(
+            output,
+            capacity,
+            "[WARN] ",
+            source + 5
+        );
+
+        return warning;
+    }
+
+    if (
+        tfb_pp_prefix(
+            source,
+            "INFO|"
+        )
+    ) {
+        tfb_pp_copy_log_text(
+            output,
+            capacity,
+            "[INFO] ",
+            source + 5
+        );
+
+        return foreground;
+    }
+
+    tfb_pp_copy_log_text(
+        output,
+        capacity,
+        "",
+        source
+    );
+
+    return foreground;
+}
+
+
+static const char *tfb_pp_log_tail(
+    int *line_count
+) {
+    if (line_count) {
+        *line_count = 0;
+    }
+
+    if (
+        !tfb_pp_read_status_text(
+            TFB_PP_LOG_PATH,
+            tfb_pp_log_buffer,
+            sizeof(
+                tfb_pp_log_buffer
+            )
+        )
+    ) {
+        return 0;
+    }
+
+    int total = 1;
+
+    for (
+        usize index = 0;
+        tfb_pp_log_buffer[index]
+            != '\0';
+        index++
+    ) {
+        if (
+            tfb_pp_log_buffer[index]
+            == '\n'
+        ) {
+            total++;
+        }
+    }
+
+    int skip = (
+        total
+        > TFB_PP_LOG_MAX_LINES
+        ? total
+            - TFB_PP_LOG_MAX_LINES
+        : 0
+    );
+
+    char *start =
+        tfb_pp_log_buffer;
+
+    while (
+        *start
+        && skip > 0
+    ) {
+        if (*start == '\n') {
+            skip--;
+        }
+
+        start++;
+    }
+
+    int visible = 0;
+
+    for (
+        char *cursor = start;
+        *cursor;
+        cursor++
+    ) {
+        if (*cursor == '\n') {
+            visible++;
+        }
+    }
+
+    if (*start) {
+        visible++;
+    }
+
+    if (
+        visible
+        > TFB_PP_LOG_MAX_LINES
+    ) {
+        visible =
+            TFB_PP_LOG_MAX_LINES;
+    }
+
+    if (line_count) {
+        *line_count =
+            visible;
+    }
+
+    return start;
+}
+
+
+static void tfb_ui_render_pixel_partitioner(
+    const struct tfb_ui_menu_geometry *geometry,
+    int selected,
+    u32 background,
+    u32 panel,
+    u32 foreground,
+    u32 dim,
+    u32 border,
+    u32 accent,
+    u32 green,
+    u32 warning
+) {
+    if (!geometry) {
+        return;
+    }
+
+    /*
+     * HOST row.
+     *
+     * This is Bootstrap's own ADB observation, not a value
+     * supplied by Pixel Partitioner.
+     *
+     * TFB_PP_HOST_ROW_DIRTY_REFRESH_V1
+     *
+     * Clear only this small row before repainting.  This prevents
+     * stale characters when the ADB state changes from a longer
+     * label to a shorter one.
+     */
+    tfb_ui_fill_rect(
+        geometry->x,
+        315U,
+        geometry->width,
+        60U,
+        background
+    );
+
+    const char *host_state =
+        tfb_adb_display_text();
+
+    u32 host_pixel = (
+        tfb_string_equal(
+            host_state,
+            "CONNECTED"
+        )
+        ? green
+        : warning
+    );
+
+    tfb_ui_draw_text(
+        geometry->x,
+        330U,
+        "HOST",
+        3U,
+        dim
+    );
+
+    tfb_ui_draw_text_fit(
+        geometry->x + 150U,
+        330U,
+        host_state,
+        geometry->width - 150U,
+        3U,
+        2U,
+        host_pixel
+    );
+
+
+    /*
+     * Main log box.
+     *
+     * Leave only enough room below it for the Back card.
+     */
+    const u32 log_y =
+        390U;
+
+    const u32 log_height =
+        810U;
+
+    const u32 log_inner_x =
+        geometry->x + 34U;
+
+    const u32 log_inner_width = (
+        geometry->width > 68U
+        ? geometry->width - 68U
+        : geometry->width
+    );
+
+    tfb_ui_fill_rect(
+        geometry->x,
+        log_y,
+        geometry->width,
+        log_height,
+        panel
+    );
+
+    tfb_ui_outline_rect(
+        geometry->x,
+        log_y,
+        geometry->width,
+        log_height,
+        4U,
+        border
+    );
+
+    tfb_ui_draw_text(
+        log_inner_x,
+        log_y + 28U,
+        "LIVE LOG",
+        3U,
+        accent
+    );
+
+
+    int visible_lines = 0;
+
+    const char *cursor =
+        tfb_pp_log_tail(
+            &visible_lines
+        );
+
+    u32 line_y =
+        log_y + 88U;
+
+    if (
+        !cursor
+        || visible_lines == 0
+    ) {
+        tfb_ui_draw_text_fit(
+            log_inner_x,
+            line_y,
+            "Waiting for Pixel Partitioner...",
+            log_inner_width,
+            2U,
+            2U,
+            dim
+        );
+    } else {
+        int rendered = 0;
+
+        while (
+            *cursor
+            && rendered
+                < TFB_PP_LOG_MAX_LINES
+        ) {
+            char source[
+                TFB_PP_LOG_LINE_CAPACITY
+            ];
+
+            usize source_length = 0;
+
+            while (
+                cursor[source_length]
+                    != '\0'
+                && cursor[source_length]
+                    != '\n'
+                && source_length + 1
+                    < sizeof(source)
+            ) {
+                source[
+                    source_length
+                ] = cursor[
+                    source_length
+                ];
+
+                source_length++;
+            }
+
+            source[
+                source_length
+            ] = '\0';
+
+
+            char display[
+                TFB_PP_LOG_LINE_CAPACITY
+            ];
+
+            u32 line_pixel = (
+                tfb_pp_format_log_line(
+                    source,
+                    display,
+                    sizeof(display),
+                    foreground,
+                    accent,
+                    green,
+                    warning
+                )
+            );
+
+            tfb_ui_draw_text_fit(
+                log_inner_x,
+                line_y,
+                display,
+                log_inner_width,
+                2U,
+                2U,
+                line_pixel
+            );
+
+            line_y +=
+                43U;
+
+            rendered++;
+
+
+            /*
+             * Advance through the entire source line even if
+             * its presentation was truncated to our bounded
+             * display buffer.
+             */
+            while (
+                *cursor
+                && *cursor != '\n'
+            ) {
+                cursor++;
+            }
+
+            if (*cursor == '\n') {
+                cursor++;
+            }
+        }
+    }
+
+
+    /*
+     * Back remains the single ordinary menu action.
+     *
+     * Input handling is unchanged; selected == 0 maps to the
+     * profile's existing action:"back".
+     */
+    const u32 back_y =
+        geometry->y;
+
+    const u32 back_height =
+        geometry->row_height;
+
+    const u32 back_fill = (
+        selected == 0
+        ? 0x00142836U
+        : panel
+    );
+
+    const u32 back_border = (
+        selected == 0
+        ? accent
+        : border
+    );
+
+    tfb_ui_fill_rect(
+        geometry->x,
+        back_y,
+        geometry->width,
+        back_height,
+        back_fill
+    );
+
+    tfb_ui_outline_rect(
+        geometry->x,
+        back_y,
+        geometry->width,
+        back_height,
+        selected == 0
+            ? 5U
+            : 3U,
+        back_border
+    );
+
+    tfb_ui_draw_text(
+        geometry->x + 35U,
+        back_y + 34U,
+        "Back",
+        4U,
+        foreground
+    );
+
+    tfb_ui_draw_text_fit(
+        geometry->x + 35U,
+        back_y + 94U,
+        "End authorization and return Home",
+        geometry->width - 70U,
+        2U,
+        2U,
+        dim
+    );
+}
+
+
+/*
+ * TFB_PP_LIVE_PANEL_REFRESH_V1
+ *
+ * Refresh only the Pixel Partitioner right-panel dynamic region.
+ *
+ * The page title/subtitle and all left-side Boot Manager information
+ * remain untouched.  The log reader is presentation-only and does
+ * not participate in transaction authorization.
+ */
+static void tfb_fb_refresh_pixel_partitioner(
+    const struct tfb_menu_page *page,
+    int selected
+) {
+    if (
+        !tfb_fb_menu_active
+        || tfb_fb_menu_mapped_address < 0
+        || !tfb_pixel_partitioner_page(
+            page
+        )
+        || !tfb_ui_landscape_supported()
+    ) {
+        return;
+    }
+
+    struct tfb_ui_menu_geometry geometry;
+
+    if (
+        !tfb_ui_menu_geometry(
+            page,
+            &geometry
+        )
+    ) {
+        return;
+    }
+
+    tfb_ui_render_pixel_partitioner(
+        &geometry,
+        selected,
+        0x00060b12U,
+        0x000c1621U,
+        0x00f4f8fbU,
+        0x008ca0b0U,
+        0x00283d4dU,
+        0x0000d4eeU,
+        0x004ed87dU,
+        0x00ff4d5aU
+    );
+}
+
+
 static void tfb_fb_render_menu(
     const struct tfb_menu_page *page,
     int selected,
@@ -6268,6 +7088,43 @@ static void tfb_fb_render_menu(
 
         return;
     }
+
+
+    /*
+     * TFB_PIXEL_PARTITIONER_LIVE_LOG_PANEL_HOOK_V1
+     *
+     * Pixel Partitioner remains a normal submenu.
+     *
+     * Replace only its ordinary list-of-cards body with the
+     * host indicator + live log + bottom Back card.
+     */
+    if (
+        tfb_pixel_partitioner_page(
+            page
+        )
+    ) {
+        tfb_ui_render_pixel_partitioner(
+            &geometry,
+            selected,
+            background,
+            panel,
+            foreground,
+            dim,
+            border,
+            accent,
+            green,
+            warning
+        );
+
+        tfb_fb_render_status_region(
+            page,
+            elapsed_ms,
+            timeout_fired
+        );
+
+        return;
+    }
+
 
 
     for (
@@ -12588,6 +13445,47 @@ static int tfb_pp_write_marker(
 }
 
 
+
+static int tfb_pp_write_text(
+    const char *path,
+    const char *text
+) {
+    long fd;
+
+    if (
+        !path
+        || !text
+    ) {
+        return 0;
+    }
+
+    fd = tfb_syscall4(
+        SYS_OPENAT,
+        AT_FDCWD,
+        (long) path,
+        O_WRONLY
+            | O_CREAT
+            | O_TRUNC,
+        0644
+    );
+
+    if (fd < 0) {
+        return 0;
+    }
+
+    tfb_write_all(
+        fd,
+        text
+    );
+
+    tfb_close(
+        fd
+    );
+
+    return 1;
+}
+
+
 static int tfb_pixel_partitioner_page(
     const struct tfb_menu_page *page
 ) {
@@ -12619,6 +13517,15 @@ static void tfb_pixel_partitioner_deactivate(
 
     tfb_pp_remove_marker(
         TFB_PP_REPROBE_FAILED
+    );
+
+
+    tfb_pp_remove_marker(
+        "/dev/treeforge-bootstrap-pixel-partitioner-status"
+    );
+
+    tfb_pp_remove_marker(
+        "/dev/treeforge-bootstrap-pixel-partitioner-log"
     );
 
     tfb_log(
@@ -12654,6 +13561,31 @@ static int tfb_pixel_partitioner_activate(
 
         return 0;
     }
+
+    if (
+        !tfb_pp_write_text(
+            "/dev/treeforge-bootstrap-pixel-partitioner-status",
+            "Waiting for Pixel Partitioner host"
+        )
+    ) {
+        tfb_log(
+            "pixel-partitioner-status-file=failed"
+        );
+    }
+
+    if (
+        !tfb_pp_write_text(
+            "/dev/treeforge-bootstrap-pixel-partitioner-log",
+            "PASS|Bootstrap maintenance runtime\n"
+            "PASS|Pixel Partitioner authorized\n"
+            "RUNNING|Waiting for host transaction\n"
+        )
+    ) {
+        tfb_log(
+            "pixel-partitioner-log-file=failed"
+        );
+    }
+
 
     tfb_log(
         "pixel-partitioner-block-devices=ready"
@@ -14042,6 +14974,15 @@ static void tfb_run_menu(void) {
     int timeout_fired = 0;
 
     /*
+     * TFB_PP_REFRESH_CLOCK_V1
+     *
+     * Independent from page timeout bookkeeping. Pixel Partitioner
+     * has timeout_ms == 0, but its host/log display still needs a
+     * bounded periodic refresh while the page remains resident.
+     */
+    u32 pp_refresh_elapsed_ms = 0;
+
+    /*
      * TFB_AUTOBOOT_CANCEL_ON_INTERACTION_V1
      *
      * Once the user deliberately interacts with the boot manager,
@@ -14489,6 +15430,41 @@ static void tfb_run_menu(void) {
             ) {
                 tfb_fb_render_adb_region();
             }
+        }
+
+        /*
+         * TFB_PP_PERIODIC_PANEL_REFRESH_V1
+         *
+         * The ordinary dirty-region system knows about selection,
+         * footer/status, and the left-side ADB field.  Pixel
+         * Partitioner additionally consumes host-written status/log
+         * files, so refresh its own right-side panel at 4 Hz.
+         *
+         * No full-screen repaint is performed here.
+         */
+        if (
+            tfb_pixel_partitioner_page(
+                page
+            )
+        ) {
+            pp_refresh_elapsed_ms +=
+                POLL_INTERVAL_MS;
+
+            if (
+                pp_refresh_elapsed_ms
+                >= TFB_PP_REFRESH_MS
+            ) {
+                tfb_fb_refresh_pixel_partitioner(
+                    page,
+                    selected
+                );
+
+                pp_refresh_elapsed_ms =
+                    0;
+            }
+        } else {
+            pp_refresh_elapsed_ms =
+                0;
         }
 
         tfb_sleep_ms(
