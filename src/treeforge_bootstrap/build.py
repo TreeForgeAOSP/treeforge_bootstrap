@@ -296,8 +296,12 @@ def main() -> None:
         verify_frozen_runtime()
     elif args.command == "package":
         package_provider()
+        from .realizer_provider import package_realizer_provider
+        package_realizer_provider()
     elif args.command == "verify-provider":
         verify_provider()
+        from .realizer_provider import verify_realizer_provider
+        verify_realizer_provider()
     elif args.command == "image":
         if BUILD_PROFILE == "treeforge-chromiumos":
             from .chromiumos_init_boot import build
