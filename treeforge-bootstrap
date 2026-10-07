@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 
+from contextlib import ExitStack
+import getpass
+import importlib
+import os
 from pathlib import Path
 import sys
+
 
 ROOT = Path(__file__).resolve().parent
 
@@ -12,4 +17,194 @@ sys.path.insert(
 
 from treeforge_bootstrap.build import main
 
-main()
+
+def _pixel_partitioner_owner_keys():
+    override = os.environ.get(
+        "TREEFORGE_PIXEL_PARTITIONER_SOURCE"
+    )
+
+    candidates = []
+
+    if override:
+        candidate = Path(override).expanduser().resolve()
+
+        if (
+            candidate.name != "src"
+            and (
+                candidate
+                / "src"
+                / "pixel_partitioner"
+                / "owner_keys.py"
+            ).is_file()
+        ):
+            candidate = candidate / "src"
+
+        candidates.append(candidate)
+
+    candidates.extend(
+        (
+            ROOT.parent
+            / "pixel_partitioner"
+            / "src",
+
+            Path.home()
+            / "development"
+            / "pixel_partitioner"
+            / "src",
+        )
+    )
+
+    source = None
+
+    for candidate in candidates:
+        candidate = candidate.expanduser().resolve()
+
+        if (
+            candidate
+            / "pixel_partitioner"
+            / "owner_keys.py"
+        ).is_file():
+            source = candidate
+            break
+
+    if source is None:
+        raise RuntimeError(
+            "Pixel Partitioner owner-key provider was not found. "
+            "Set TREEFORGE_PIXEL_PARTITIONER_SOURCE."
+        )
+
+    source_text = str(source)
+
+    if source_text not in sys.path:
+        sys.path.insert(0, source_text)
+
+    return importlib.import_module(
+        "pixel_partitioner.owner_keys"
+    )
+
+
+def _has_explicit_key_override(argv):
+    names = (
+        "--avb-key",
+        "--parent-vbmeta-key",
+        "--avb-keyset",
+    )
+
+    for value in argv:
+        for name in names:
+            if value == name or value.startswith(name + "="):
+                return True
+
+    return False
+
+
+def _run():
+    argv = sys.argv[1:]
+
+    # Only final image-family realization needs private AVB material.
+    if (
+        "realize-family" not in argv
+        or _has_explicit_key_override(argv)
+    ):
+        main()
+        return
+
+    owner_keys = _pixel_partitioner_owner_keys()
+
+    root = (
+        owner_keys
+        .default_root()
+        .expanduser()
+        .resolve()
+    )
+
+    child = (
+        owner_keys
+        .companion_root(root)
+        .expanduser()
+        .resolve()
+    )
+
+    root_record = owner_keys.inspect(root)
+    child_record = owner_keys.inspect(child)
+
+    if (
+        root_record.get("algorithm")
+        != "SHA256_RSA4096"
+    ):
+        raise RuntimeError(
+            "TreeForge owner root must be SHA256_RSA4096"
+        )
+
+    if (
+        child_record.get("algorithm")
+        != "SHA256_RSA2048"
+    ):
+        raise RuntimeError(
+            "TreeForge owner companion must be SHA256_RSA2048"
+        )
+
+    password = getpass.getpass(
+        "Owner AVB signing passphrase: "
+    )
+
+    with ExitStack() as stack:
+        root_private, _ = stack.enter_context(
+            owner_keys.unlocked(
+                root,
+                password,
+            )
+        )
+
+        try:
+            child_private, _ = stack.enter_context(
+                owner_keys.unlocked(
+                    child,
+                    password,
+                )
+            )
+        except owner_keys.OwnerKeyError:
+            child_password = getpass.getpass(
+                "Owner AVB child signing passphrase: "
+            )
+
+            child_private, _ = stack.enter_context(
+                owner_keys.unlocked(
+                    child,
+                    child_password,
+                )
+            )
+
+        print()
+        print("TreeForge owner AVB")
+        print("-------------------")
+        print(
+            "Root key ID:       "
+            + root_record["key_id"]
+        )
+        print(
+            "Child key ID:      "
+            + child_record["key_id"]
+        )
+        print(
+            "Child public SHA1: "
+            + child_record["public_key_sha1"]
+        )
+        print("Persistent plaintext key: NO")
+        print()
+
+        # Existing explicit-key CLI remains the internal realization
+        # contract.  We simply populate it automatically.
+        sys.argv.extend(
+            (
+                "--avb-key",
+                str(child_private),
+                "--parent-vbmeta-key",
+                str(root_private),
+            )
+        )
+
+        main()
+
+
+_run()

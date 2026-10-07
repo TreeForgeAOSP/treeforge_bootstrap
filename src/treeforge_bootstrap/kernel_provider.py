@@ -19,8 +19,7 @@ KERNEL_REPOSITORY = (
 )
 
 KERNEL_RELEASE_TAG = (
-    "treeforge-bootstrap-"
-    "tangorpro-android15-r0.94-4"
+    "r0.94-v1.0b1"
 )
 
 KERNEL_ASSET = "boot.img"
@@ -36,7 +35,7 @@ KERNEL_URL = (
 EXPECTED_KERNEL_BYTES = 67108864
 
 EXPECTED_KERNEL_SHA256 = (
-    "59d9103f7c9e343a96af6d37f9307f4610db7d228976b9d67ac59fab00bcf20b"
+    "c1335cb683b975bb395f1af87e6a4bef01d8b3e0b004d55ac33339e01f715120"
 )
 
 KERNEL_CACHE = (

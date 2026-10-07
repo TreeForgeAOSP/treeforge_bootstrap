@@ -826,6 +826,7 @@ def _verify_replaced_child_contract(
     partition: str,
     source_info: str,
     realized_info: str,
+    allow_public_key_change: bool = False,
 ) -> None:
     source_header = _header_fields(
         source_info
@@ -835,12 +836,19 @@ def _verify_replaced_child_contract(
         realized_info
     )
 
-    for field in (
-        "Public key (sha1)",
+    fields = [
         "Algorithm",
         "Rollback Index",
         "Flags",
-    ):
+    ]
+
+    if not allow_public_key_change:
+        fields.insert(
+            0,
+            "Public key (sha1)",
+        )
+
+    for field in fields:
         if (
             source_header.get(field)
             != realized_header.get(field)
@@ -1839,6 +1847,13 @@ def realize_family(
     # Build the two TreeForge-owned boot-family outputs using the
     # backed-up init_boot/root-vbmeta as the source contract.
     #
+    if avb_key is None:
+        raise TreeForgeBootstrapAvbGraphError(
+            "realize-family requires an explicit downstream "
+            "boot-chain child key or --avb-keyset; Bootstrap "
+            "no longer owns a source/AOSP private key"
+        )
+
     build_image(
         source_init_boot=(
             source_images["init_boot"]
@@ -1847,6 +1862,9 @@ def realize_family(
             source_images["vbmeta"]
         ),
         signing_key=avb_key,
+        require_parent_match=(
+            parent_vbmeta_key is None
+        ),
     )
 
     verify_image(
@@ -1857,6 +1875,9 @@ def realize_family(
             source_images["vbmeta"]
         ),
         signing_key=avb_key,
+        require_parent_match=(
+            parent_vbmeta_key is None
+        ),
     )
 
     #
@@ -1887,6 +1908,9 @@ def realize_family(
             ),
             realized_info=(
                 generated_infos[partition]
+            ),
+            allow_public_key_change=(
+                parent_vbmeta_key is not None
             ),
         )
 

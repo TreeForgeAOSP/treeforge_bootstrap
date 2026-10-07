@@ -18,6 +18,7 @@ from .image import (
     verify_image,
 )
 from .paths import REPOSITORY_ROOT
+from .version import runtime_identity
 
 
 IDENTITY_FILE = (
@@ -148,9 +149,7 @@ def interactive() -> None:
     adb = ensure_host_tool("adb")
 
     expected_identity = (
-        IDENTITY_FILE
-        .read_text(encoding="utf-8")
-        .strip()
+        runtime_identity()
     )
 
     deadline = (

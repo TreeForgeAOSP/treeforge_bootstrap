@@ -8,6 +8,12 @@ import struct
 import subprocess
 import tomllib
 
+from .version import (
+    boot_manager_version,
+    project_version,
+    runtime_abi_version,
+)
+
 from .menu import (
     MenuAction,
     MenuCondition,
@@ -1633,8 +1639,14 @@ static void tfb_fb_draw_text(
 
 
 
+static const char tfb_bootstrap_version[] =
+    "__TREEFORGE_BOOTSTRAP_VERSION__";
+
 static const char tfb_version[] =
-    "V__TREEFORGE_BOOTSTRAP_VERSION__";
+    "__TREEFORGE_BOOT_MANAGER_VERSION__";
+
+static const char tfb_runtime_abi_version[] =
+    "__TREEFORGE_RUNTIME_ABI_VERSION__";
 
 
 #define TFB_ACTION_NONE 0
@@ -1654,6 +1666,7 @@ static const char tfb_version[] =
 #define TFB_ACTION_RESTART_ADB_USB 14
 #define TFB_ACTION_NOT_IMPLEMENTED 15
 #define TFB_ACTION_BOOT_DIAGNOSTICS 16
+#define TFB_ACTION_REBOOT_SYSTEM 17
 
 #define TFB_CONDITION_ALWAYS 0
 #define TFB_CONDITION_FULL_AB 1
@@ -1706,7 +1719,24 @@ struct tfb_menu_page {
 struct tfb_menu_runtime_state {
     int full_ab;
     int alternate_os_configured;
+
+    /*
+     * Presentation label retained for the menu contract.
+     */
     char alternate_os_name[64];
+
+    /*
+     * Identity discovered directly from treeforge_os.
+     *
+     * These fields are read-only runtime observations. They are not
+     * installation authority and are never persisted by Bootstrap.
+     */
+    char alternate_os_detected_name[96];
+    char alternate_os_version[96];
+    char alternate_os_build[96];
+    char alternate_os_milestone[64];
+    char alternate_os_board[96];
+
     int root_installed;
     int root_persistence_enabled;
 };
@@ -1717,6 +1747,11 @@ tfb_menu_state = {
     0,
     0,
     "Alternate OS",
+    "",
+    "",
+    "",
+    "",
+    "",
     0,
     0,
 };
@@ -1832,6 +1867,17 @@ static int tfb_ui_read_u64(
 );
 
 
+/*
+ * TFB_ALTROOT_INSTALLED_PROBE_V1
+ *
+ * Implemented with the accepted storage-backed alternate-root
+ * helpers later in this translation unit.
+ */
+static int tfb_altroot_installed(
+    void
+);
+
+
 static void tfb_menu_load_runtime_state(
     void
 ) {
@@ -1867,6 +1913,17 @@ static void tfb_menu_load_runtime_state(
         || full_ab_by_geometry
     );
 
+    /*
+     * TFB_ALTROOT_DYNAMIC_INVENTORY_V1
+     *
+     * Installation state belongs to the storage-backed OS itself.
+     * The metadata name is optional presentation metadata and must
+     * never be the installed/not-installed authority.
+     */
+    tfb_menu_state
+        .alternate_os_configured =
+        tfb_altroot_installed();
+
     char alternate_name[64];
 
     if (
@@ -1897,9 +1954,6 @@ static void tfb_menu_load_runtime_state(
         tfb_menu_state
             .alternate_os_name[index] =
             '\0';
-
-        tfb_menu_state
-            .alternate_os_configured = 1;
     } else {
         static const char fallback[] =
             "Alternate OS";
@@ -1924,10 +1978,8 @@ static void tfb_menu_load_runtime_state(
         tfb_menu_state
             .alternate_os_name[index] =
             '\0';
-
-        tfb_menu_state
-            .alternate_os_configured = 0;
     }
+
 }
 
 
@@ -2283,6 +2335,13 @@ static const char *tfb_menu_action_name(
 
     if (
         action
+        == TFB_ACTION_REBOOT_SYSTEM
+    ) {
+        return "reboot_system";
+    }
+
+    if (
+        action
         == TFB_ACTION_REBOOT_BOOTLOADER
     ) {
         return "reboot_bootloader";
@@ -2561,50 +2620,24 @@ static int tfb_adb_display_state(
 static const char *tfb_adb_display_text(
     void
 ) {
+    /*
+     * TFB_RUNTIME_HEALTH_LABELS_V3
+     */
     int state =
         tfb_adb_display_state();
 
     if (state == 1) {
-        return "READY";
+        return "CONNECTED";
     }
 
-    if (state == 2) {
-        return "RESTARTING";
+    if (
+        state >= 10
+        && state <= 17
+    ) {
+        return "UNAVAILABLE";
     }
 
-    if (state == 10) {
-        return "ERROR B_SESSION";
-    }
-
-    if (state == 11) {
-        return "ERROR UDC";
-    }
-
-    if (state == 12) {
-        return "ERROR CONFIGFS";
-    }
-
-    if (state == 13) {
-        return "ERROR FFS";
-    }
-
-    if (state == 14) {
-        return "ERROR ADBD";
-    }
-
-    if (state == 15) {
-        return "ERROR LINK";
-    }
-
-    if (state == 16) {
-        return "ERROR BIND";
-    }
-
-    if (state == 17) {
-        return "ERROR UNKNOWN";
-    }
-
-    return "OFFLINE";
+    return "DISCONNECTED";
 }
 
 
@@ -3189,6 +3222,16 @@ static void tfb_ui_draw_text_fit(
 }
 
 
+static void tfb_ui_draw_field(
+    u32 x,
+    u32 y,
+    u32 width,
+    const char *label,
+    const char *value,
+    u32 label_pixel,
+    u32 value_pixel
+);
+
 static int tfb_ui_marker_exists(
     const char *path
 ) {
@@ -3518,6 +3561,44 @@ static int tfb_ui_menu_geometry(
     }
 
     /*
+     * TFB_COMPONENT_VERSIONS_TOUCH_BACK_V3
+     *
+     * Component Versions is a viewer, but Back remains a normal
+     * full-width touch target directly above the footer.
+     */
+    if (
+        page->title
+        && tfb_string_equal(
+            page->title,
+            "Component Versions"
+        )
+    ) {
+        geometry->x =
+            TFB_UI_MENU_X;
+
+        geometry->y =
+            1360U;
+
+        geometry->width = (
+            TFB_UI_LOGICAL_WIDTH
+            - TFB_UI_MENU_X
+            - TFB_UI_MENU_RIGHT_MARGIN
+        );
+
+        geometry->row_height =
+            96U;
+
+        geometry->row_gap =
+            0U;
+
+        geometry->item_count =
+            item_count;
+
+        return 1;
+    }
+
+
+    /*
      * TFB_BOOT_MANAGER_V2E_PARTITION_GEOMETRY_V1
      *
      * Partition Information is primarily a data viewer.
@@ -3556,25 +3637,12 @@ static int tfb_ui_menu_geometry(
 
 
     /*
-     * TFB_BOOT_MANAGER_V2_HOME_GEOMETRY
+     * TFB_MENU_ITERATION3_EXACT_V1
      *
-     * Home has six logical entries but five visual rows because
-     * Resume and Boot Options share the first row.
+     * Home has five logical entries and five full-width rows.
      */
     int layout_count =
         item_count;
-
-    if (
-        page->title
-        && tfb_string_equal(
-            page->title,
-            "Home"
-        )
-        && item_count > 1
-    ) {
-        layout_count =
-            item_count - 1;
-    }
 
     u32 width = (
         TFB_UI_LOGICAL_WIDTH
@@ -3888,49 +3956,11 @@ static void tfb_fb_render_menu_card(
     u32 visual_row =
         (u32) index;
 
-    int settings_card = 0;
-
     /*
-     * Home:
-     *
-     *   index 0 = Resume
-     *   index 1 = settings square
-     *   index 2 = Pixel Partitioner
-     *   index 3 = Reboot
-     *   index 4 = Maintenance
-     *   index 5 = Future Features
+     * Boot Options is now a normal full-width Home row.
+     * The old settings glyph branch below remains unreachable.
      */
-    if (
-        tfb_ui_home_page(
-            page
-        )
-    ) {
-        if (index == 0) {
-            card_width = (
-                geometry.width
-                - geometry.row_height
-                - geometry.row_gap
-            );
-
-            visual_row = 0U;
-        } else if (index == 1) {
-            settings_card = 1;
-
-            card_x = (
-                geometry.x
-                + geometry.width
-                - geometry.row_height
-            );
-
-            card_width =
-                geometry.row_height;
-
-            visual_row = 0U;
-        } else {
-            visual_row =
-                (u32) (index - 1);
-        }
-    }
+    int settings_card = 0;
 
     u32 row_y = (
         geometry.y
@@ -4136,62 +4166,61 @@ static void tfb_fb_render_adb_region(
     void
 ) {
     /*
-     * TFB_BOOT_MANAGER_V2_TOP_ADB
+     * TFB_MENU_SYSTEM_ADB_REGION_R3
      *
-     * Persistent top status:
-     *
-     *   battery  Touch []  ADB []  VOL -  VOL +  POWER
-     *
-     * Keep this area isolated so the retained dirty-region ADB
-     * redraw never repaints the menu or left information panel.
+     * ADB remains a live dirty-region field. Only its final
+     * position changes.
      */
     const u32 x =
-        1605U;
+        125U;
 
     const u32 y =
-        92U;
+        1290U;
 
-    const u32 background =
-        0x00060b12U;
+    const u32 width =
+        250U;
+
+    const u32 panel =
+        0x000c1621U;
 
     const u32 dim =
-        0x008696a3U;
+        0x008ca0b0U;
 
     const u32 green =
-        0x004bd37bU;
+        0x004ed87dU;
 
     const u32 warning =
-        0x00e4c45cU;
+        0x00ff4d5aU;
 
     tfb_ui_fill_rect(
-        x - 10U,
-        y - 8U,
-        135U,
-        42U,
-        background
-    );
-
-    tfb_ui_draw_text(
-        x,
-        y,
-        "ADB",
-        3U,
-        dim
+        x - 8U,
+        y - 10U,
+        width + 16U,
+        66U,
+        panel
     );
 
     int adb_state =
         tfb_adb_display_state();
 
-    tfb_ui_fill_rect(
-        x + 75U,
-        y + 5U,
-        16U,
-        16U,
+    tfb_ui_draw_field(
+        x,
+        y,
+        width,
+        "ADB",
+        tfb_adb_display_text(),
+        dim,
         adb_state == 1
             ? green
-            : warning
+            : (
+                adb_state >= 10
+                ? warning
+                : dim
+            )
     );
 }
+
+
 
 
 
@@ -4845,6 +4874,694 @@ static void tfb_ui_render_partition_information(
 }
 
 
+
+/*
+ * TFB_COMPONENT_VERSIONS_VIEWER_V1
+ *
+ * Read-only live component inventory.
+ *
+ * Kernel-owned values come from /sys/kernel/treeforge.
+ * Linux ABI remains independently visible through osrelease.
+ *
+ * Alternate-OS identity is discovered from the installed
+ * treeforge_os filesystem. Bootstrap consumes exposed metadata;
+ * it does not assign an OS identity itself.
+ */
+static int tfb_ui_component_versions_page(
+    const struct tfb_menu_page *page
+) {
+    if (
+        !page
+        || !page->title
+    ) {
+        return 0;
+    }
+
+    static const char expected[] =
+        "Component Versions";
+
+    usize index = 0;
+
+    while (
+        expected[index] != '\0'
+        && page->title[index]
+            == expected[index]
+    ) {
+        index++;
+    }
+
+    return (
+        expected[index] == '\0'
+        && page->title[index] == '\0'
+    );
+}
+
+
+static void tfb_ui_render_component_versions(
+    const struct tfb_ui_menu_geometry *geometry,
+    u32 accent,
+    u32 dim,
+    u32 foreground
+) {
+    if (!geometry) {
+        return;
+    }
+
+    char release[96] =
+        "NOT EXPOSED";
+
+    char linux_base[96] =
+        "NOT EXPOSED";
+
+    char panthor[96] =
+        "NOT EXPOSED";
+
+    char panthor_backport[96] =
+        "NOT EXPOSED";
+
+    char drm_backport[96] =
+        "NOT EXPOSED";
+
+    char linux_abi[160] =
+        "UNKNOWN";
+
+    tfb_menu_read_state_text(
+        "/sys/kernel/treeforge/release",
+        release,
+        sizeof(release)
+    );
+
+    tfb_menu_read_state_text(
+        "/sys/kernel/treeforge/linux_base",
+        linux_base,
+        sizeof(linux_base)
+    );
+
+    tfb_menu_read_state_text(
+        "/sys/kernel/treeforge/panthor",
+        panthor,
+        sizeof(panthor)
+    );
+
+    tfb_menu_read_state_text(
+        "/sys/kernel/treeforge/panthor_backport",
+        panthor_backport,
+        sizeof(panthor_backport)
+    );
+
+    tfb_menu_read_state_text(
+        "/sys/kernel/treeforge/drm_backport",
+        drm_backport,
+        sizeof(drm_backport)
+    );
+
+    tfb_menu_read_state_text(
+        "/proc/sys/kernel/osrelease",
+        linux_abi,
+        sizeof(linux_abi)
+    );
+
+    u32 x =
+        geometry->x + 40U;
+
+    u32 y =
+        390U;
+
+    tfb_ui_draw_text(
+        x,
+        y,
+        "TREEFORGE",
+        4U,
+        accent
+    );
+
+    y += 70U;
+
+    tfb_ui_draw_kv(
+        x,
+        y,
+        "BOOTSTRAP",
+        tfb_bootstrap_version,
+        dim,
+        foreground
+    );
+
+    y += 52U;
+
+    tfb_ui_draw_kv(
+        x,
+        y,
+        "BOOT MANAGER",
+        tfb_version,
+        dim,
+        foreground
+    );
+
+    y += 52U;
+
+    tfb_ui_draw_kv(
+        x,
+        y,
+        "RUNTIME ABI",
+        tfb_runtime_abi_version,
+        dim,
+        foreground
+    );
+
+    y += 90U;
+
+    tfb_ui_draw_text(
+        x,
+        y,
+        "KERNEL",
+        4U,
+        accent
+    );
+
+    y += 70U;
+
+    tfb_ui_draw_kv(
+        x,
+        y,
+        "TREEFORGE KERNEL",
+        release,
+        dim,
+        foreground
+    );
+
+    y += 52U;
+
+    tfb_ui_draw_kv(
+        x,
+        y,
+        "LINUX BASE",
+        linux_base,
+        dim,
+        foreground
+    );
+
+    y += 52U;
+
+    tfb_ui_draw_kv(
+        x,
+        y,
+        "KERNEL ABI",
+        linux_abi,
+        dim,
+        foreground
+    );
+
+    y += 52U;
+
+    tfb_ui_draw_kv(
+        x,
+        y,
+        "PANTHOR",
+        panthor,
+        dim,
+        foreground
+    );
+
+    y += 52U;
+
+    tfb_ui_draw_kv(
+        x,
+        y,
+        "PANTHOR BACKPORT",
+        panthor_backport,
+        dim,
+        foreground
+    );
+
+    y += 52U;
+
+    tfb_ui_draw_kv(
+        x,
+        y,
+        "DRM BACKPORT",
+        drm_backport,
+        dim,
+        foreground
+    );
+
+    /*
+     * ALTERNATE OS
+     *
+     * Installation state comes from the storage-backed probe.
+     * Identity fields come from the mounted OS itself.
+     */
+    y += 72U;
+
+    tfb_ui_draw_text(
+        x,
+        y,
+        "ALTERNATE OS",
+        4U,
+        accent
+    );
+
+    y += 58U;
+
+    if (
+        !tfb_menu_state
+            .alternate_os_configured
+    ) {
+        tfb_ui_draw_kv(
+            x,
+            y,
+            "STATUS",
+            "NOT INSTALLED",
+            dim,
+            foreground
+        );
+    } else {
+        const char *alternate_name = (
+            tfb_menu_state
+                .alternate_os_detected_name[0]
+            ? tfb_menu_state
+                .alternate_os_detected_name
+            : tfb_menu_state
+                .alternate_os_name
+        );
+
+        tfb_ui_draw_kv(
+            x,
+            y,
+            "NAME",
+            alternate_name,
+            dim,
+            foreground
+        );
+
+        if (
+            tfb_menu_state
+                .alternate_os_version[0]
+        ) {
+            y += 46U;
+
+            tfb_ui_draw_kv(
+                x,
+                y,
+                "VERSION",
+                tfb_menu_state
+                    .alternate_os_version,
+                dim,
+                foreground
+            );
+        }
+
+        if (
+            tfb_menu_state
+                .alternate_os_build[0]
+        ) {
+            y += 46U;
+
+            tfb_ui_draw_kv(
+                x,
+                y,
+                "BUILD",
+                tfb_menu_state
+                    .alternate_os_build,
+                dim,
+                foreground
+            );
+        }
+
+        if (
+            tfb_menu_state
+                .alternate_os_milestone[0]
+        ) {
+            y += 46U;
+
+            tfb_ui_draw_kv(
+                x,
+                y,
+                "MILESTONE",
+                tfb_menu_state
+                    .alternate_os_milestone,
+                dim,
+                foreground
+            );
+        }
+
+        if (
+            tfb_menu_state
+                .alternate_os_board[0]
+        ) {
+            y += 46U;
+
+            tfb_ui_draw_kv(
+                x,
+                y,
+                "BOARD",
+                tfb_menu_state
+                    .alternate_os_board,
+                dim,
+                foreground
+            );
+        }
+    }
+
+}
+
+
+
+/*
+ * TFB_DYNAMIC_BOOT_IDENTITY_V3
+ *
+ * Android release is observed from installed build properties.
+ * Alternate-OS identity is supplied by the existing read-only
+ * treeforge_os probe.
+ */
+static void tfb_ui_inventory_set(
+    char *output,
+    usize capacity,
+    const char *value
+) {
+    if (!output || capacity < 1) {
+        return;
+    }
+
+    output[0] = '\0';
+
+    if (!value) {
+        return;
+    }
+
+    usize index = 0;
+
+    while (
+        value[index] != '\0'
+        && index + 1 < capacity
+    ) {
+        output[index] = value[index];
+        index++;
+    }
+
+    output[index] = '\0';
+}
+
+
+static void tfb_ui_inventory_append(
+    char *output,
+    usize capacity,
+    const char *value
+) {
+    if (
+        !output
+        || !value
+        || capacity < 1
+    ) {
+        return;
+    }
+
+    usize out = 0;
+
+    while (
+        out < capacity
+        && output[out] != '\0'
+    ) {
+        out++;
+    }
+
+    if (out >= capacity) {
+        return;
+    }
+
+    usize input = 0;
+
+    while (
+        value[input] != '\0'
+        && out + 1 < capacity
+    ) {
+        output[out++] =
+            value[input++];
+    }
+
+    output[out] = '\0';
+}
+
+
+static int tfb_ui_android_release(
+    char *output,
+    usize capacity
+) {
+    if (!output || capacity < 2) {
+        return 0;
+    }
+
+    output[0] = '\0';
+
+    static const char *paths[] = {
+        "/system/system/build.prop",
+        "/system/build.prop",
+        "/product/build.prop",
+        "/vendor/build.prop",
+        "/prop.default",
+    };
+
+    static const char key[] =
+        "ro.build.version.release=";
+
+    usize key_length = 0;
+
+    while (key[key_length] != '\0') {
+        key_length++;
+    }
+
+    for (
+        usize path_index = 0;
+        path_index
+            < sizeof(paths)
+                / sizeof(paths[0]);
+        path_index++
+    ) {
+        long fd = tfb_open(
+            paths[path_index],
+            O_RDONLY | O_NONBLOCK
+        );
+
+        if (fd < 0) {
+            continue;
+        }
+
+        char data[8192];
+
+        long amount = tfb_syscall3(
+            SYS_READ,
+            fd,
+            (long) data,
+            sizeof(data) - 1
+        );
+
+        tfb_close(fd);
+
+        if (amount <= 0) {
+            continue;
+        }
+
+        usize length =
+            (usize) amount;
+
+        if (length >= sizeof(data)) {
+            length =
+                sizeof(data) - 1;
+        }
+
+        data[length] = '\0';
+
+        usize position = 0;
+
+        while (position < length) {
+            usize begin =
+                position;
+
+            usize end =
+                begin;
+
+            while (
+                end < length
+                && data[end] != '\n'
+                && data[end] != '\r'
+            ) {
+                end++;
+            }
+
+            position = end;
+
+            while (
+                position < length
+                && (
+                    data[position] == '\n'
+                    || data[position] == '\r'
+                )
+            ) {
+                position++;
+            }
+
+            if (
+                end - begin
+                <= key_length
+            ) {
+                continue;
+            }
+
+            usize key_index = 0;
+
+            while (
+                key_index < key_length
+                && data[
+                    begin + key_index
+                ] == key[key_index]
+            ) {
+                key_index++;
+            }
+
+            if (
+                key_index
+                != key_length
+            ) {
+                continue;
+            }
+
+            usize source =
+                begin + key_length;
+
+            usize destination = 0;
+
+            while (
+                source < end
+                && destination + 1
+                    < capacity
+            ) {
+                unsigned char value =
+                    (unsigned char)
+                    data[source++];
+
+                if (
+                    value < 0x20
+                    || value > 0x7e
+                ) {
+                    output[0] = '\0';
+                    return 0;
+                }
+
+                output[destination++] =
+                    (char) value;
+            }
+
+            output[destination] =
+                '\0';
+
+            return destination > 0;
+        }
+    }
+
+    return 0;
+}
+
+
+static void tfb_ui_android_inventory(
+    int slot_b,
+    char *output,
+    usize capacity
+) {
+    if (
+        slot_b
+        && !tfb_menu_state.full_ab
+    ) {
+        tfb_ui_inventory_set(
+            output,
+            capacity,
+            "NOT INSTALLED"
+        );
+
+        return;
+    }
+
+    char release[32];
+
+    if (
+        tfb_ui_android_release(
+            release,
+            sizeof(release)
+        )
+    ) {
+        tfb_ui_inventory_set(
+            output,
+            capacity,
+            "ANDROID "
+        );
+
+        tfb_ui_inventory_append(
+            output,
+            capacity,
+            release
+        );
+
+        return;
+    }
+
+    tfb_ui_inventory_set(
+        output,
+        capacity,
+        "INSTALLED"
+    );
+}
+
+
+static void tfb_ui_alternate_inventory(
+    char *output,
+    usize capacity
+) {
+    if (
+        !tfb_menu_state
+            .alternate_os_configured
+    ) {
+        tfb_ui_inventory_set(
+            output,
+            capacity,
+            "NOT INSTALLED"
+        );
+
+        return;
+    }
+
+    const char *name = (
+        tfb_menu_state
+            .alternate_os_detected_name[0]
+        ? tfb_menu_state
+            .alternate_os_detected_name
+        : tfb_menu_state
+            .alternate_os_name
+    );
+
+    tfb_ui_inventory_set(
+        output,
+        capacity,
+        name
+    );
+
+    if (
+        tfb_menu_state
+            .alternate_os_version[0]
+    ) {
+        tfb_ui_inventory_append(
+            output,
+            capacity,
+            " "
+        );
+
+        tfb_ui_inventory_append(
+            output,
+            capacity,
+            tfb_menu_state
+                .alternate_os_version
+        );
+    }
+}
+
+
 static void tfb_fb_render_menu(
     const struct tfb_menu_page *page,
     int selected,
@@ -4881,7 +5598,7 @@ static void tfb_fb_render_menu(
         0x004ed87dU;
 
     const u32 warning =
-        0x00e4c45cU;
+        0x00ff4d5aU;
 
     /*
      * Keep an explicit degraded fallback rather than ever attempting
@@ -4936,153 +5653,10 @@ static void tfb_fb_render_menu(
         foreground
     );
 
-    /*
-     * TFB_BOOT_MANAGER_V2F_HEADER_IDENTITY_V1
-     *
-     * Keep runtime identity directly with the TreeForge header.
-     */
-    tfb_ui_draw_text(
-        110U,
-        210U,
-        "BOOTSTRAP",
-        3U,
-        dim
-    );
-
-    tfb_ui_draw_text_fit(
-        310U,
-        210U,
-        tfb_version,
-        220U,
-        4U,
-        3U,
-        foreground
-    );
-
-    char kernel_release[128] =
-        "UNKNOWN";
-
-    tfb_menu_read_state_text(
-        "/proc/sys/kernel/osrelease",
-        kernel_release,
-        sizeof(kernel_release)
-    );
-
-    tfb_ui_draw_text(
-        110U,
-        258U,
-        "KERNEL",
-        3U,
-        dim
-    );
-
-    tfb_ui_draw_text_fit(
-        255U,
-        258U,
-        kernel_release,
-        1030U,
-        3U,
-        2U,
-        foreground
-    );
 
     /*
-     * Pixel Tablet physical controls live on the top-right edge.
-     * The arrows point toward the real buttons.
+     * TFB_TOP_INPUT_HINTS_RESTORED_V3
      */
-    tfb_ui_draw_text(
-        1840U,
-        28U,
-        "^",
-        5U,
-        accent
-    );
-
-    tfb_ui_draw_text(
-        2040U,
-        28U,
-        "^",
-        5U,
-        accent
-    );
-
-    tfb_ui_draw_text(
-        2295U,
-        28U,
-        "^",
-        5U,
-        accent
-    );
-
-    /*
-     * TFB_BOOT_MANAGER_V2_TOP_STATUS
-     *
-     * Locked order:
-     *
-     *   86%      Touch []   ADB []      VOL -   VOL +   POWER
-     *
-     * Battery is read on full redraw. ADB retains its own dirty
-     * redraw helper.
-     */
-    char top_battery_value[32] =
-        "--%";
-
-    u64 top_capacity = 0;
-
-    if (
-        tfb_ui_read_u64(
-            "/sys/class/power_supply/battery/capacity",
-            &top_capacity
-        )
-    ) {
-        top_battery_value[0] =
-            '\0';
-
-        tfb_ui_u64_text(
-            top_capacity,
-            top_battery_value,
-            sizeof(top_battery_value)
-        );
-
-        tfb_ui_append(
-            top_battery_value,
-            sizeof(top_battery_value),
-            "%"
-        );
-    }
-
-    tfb_ui_draw_text_fit(
-        1300U,
-        92U,
-        top_battery_value,
-        100U,
-        3U,
-        2U,
-        foreground
-    );
-
-    tfb_ui_draw_text(
-        1425U,
-        92U,
-        "TOUCH",
-        3U,
-        dim
-    );
-
-    tfb_ui_fill_rect(
-        1547U,
-        97U,
-        16U,
-        16U,
-        tfb_ui_marker_exists(
-            "/dev/treeforge-bootstrap-touchscreen-ready"
-        )
-            ? green
-            : warning
-    );
-
-    tfb_fb_render_adb_region();
-
     tfb_ui_draw_text(
         1780U,
         92U,
@@ -5108,41 +5682,335 @@ static void tfb_fb_render_menu(
     );
 
     /*
-     * Left information panel.
+     * TFB_FINAL_MENU_CONSOLIDATION_R3
      *
-     * TFB_BOOT_MANAGER_V2F_LEFT_PANEL_GEOMETRY_V1
+     * Final normal-menu information layout:
+     *
+     *   BOOT OPTIONS
+     *   KERNEL STACK
+     *   SYSTEM
+     *
+     * Detailed component information belongs in
+     * Maintenance -> Component Versions.
      */
     const u32 left_x =
         80U;
 
-    const u32 left_y =
-        310U;
-
     const u32 left_width =
         1180U;
 
-    const u32 left_height =
-        1120U;
+    const u32 inner_x =
+        left_x + 45U;
+
+
+    /*
+     * ------------------------------------------------------------
+     * BOOT OPTIONS
+     * ------------------------------------------------------------
+     */
+    const u32 boot_box_y =
+        220U;
+
+    const u32 boot_box_height =
+        360U;
 
     tfb_ui_fill_rect(
         left_x,
-        left_y,
+        boot_box_y,
         left_width,
-        left_height,
+        boot_box_height,
         panel
     );
 
     tfb_ui_outline_rect(
         left_x,
-        left_y,
+        boot_box_y,
         left_width,
-        left_height,
+        boot_box_height,
         4U,
         border
     );
 
-    u32 ix =
-        left_x + 45U;
+    tfb_ui_draw_text(
+        inner_x,
+        boot_box_y + 30U,
+        "BOOT OPTIONS",
+        4U,
+        accent
+    );
+
+    u32 boot_state_y =
+        boot_box_y + 95U;
+
+    char android_a_state[64];
+    char android_b_state[64];
+    char alternate_os_state[192];
+
+    tfb_ui_android_inventory(
+        0,
+        android_a_state,
+        sizeof(android_a_state)
+    );
+
+    tfb_ui_android_inventory(
+        1,
+        android_b_state,
+        sizeof(android_b_state)
+    );
+
+    tfb_ui_alternate_inventory(
+        alternate_os_state,
+        sizeof(alternate_os_state)
+    );
+
+
+    tfb_ui_draw_boot_state(
+        inner_x,
+        boot_state_y,
+        "ANDROID A",
+        android_a_state,
+        green
+    );
+
+    boot_state_y += 50U;
+
+    tfb_ui_draw_boot_state(
+        inner_x,
+        boot_state_y,
+        "ANDROID B",
+        android_b_state,
+        tfb_menu_state.full_ab
+            ? green
+            : dim
+    );
+
+    boot_state_y += 50U;
+
+    tfb_ui_draw_boot_state(
+        inner_x,
+        boot_state_y,
+        "ALTERNATE OS",
+        alternate_os_state,
+        tfb_menu_state
+            .alternate_os_configured
+            ? green
+            : dim
+    );
+
+    boot_state_y += 50U;
+
+    tfb_ui_draw_boot_state(
+        inner_x,
+        boot_state_y,
+        "RECOVERY",
+        "NOT INSTALLED",
+        dim
+    );
+
+    boot_state_y += 50U;
+
+    tfb_ui_draw_boot_state(
+        inner_x,
+        boot_state_y,
+        "ROOT",
+        tfb_menu_state.root_installed
+            ? "INSTALLED"
+            : "NOT INSTALLED",
+        tfb_menu_state.root_installed
+            ? green
+            : dim
+    );
+
+
+    /*
+     * ------------------------------------------------------------
+     * KERNEL STACK
+     * ------------------------------------------------------------
+     *
+     * These are live runtime values supplied by the kernel.
+     *
+     * Until the new release kernel is installed they intentionally
+     * report NOT EXPOSED instead of displaying expected/hardcoded
+     * versions.
+     */
+    const u32 kernel_box_y =
+        600U;
+
+    const u32 kernel_box_height =
+        380U;
+
+    tfb_ui_fill_rect(
+        left_x,
+        kernel_box_y,
+        left_width,
+        kernel_box_height,
+        panel
+    );
+
+    tfb_ui_outline_rect(
+        left_x,
+        kernel_box_y,
+        left_width,
+        kernel_box_height,
+        4U,
+        border
+    );
+
+    tfb_ui_draw_text(
+        inner_x,
+        kernel_box_y + 30U,
+        "KERNEL STACK",
+        4U,
+        accent
+    );
+
+    char kernel_release[96] =
+        "NOT EXPOSED";
+
+    char kernel_linux_base[96] =
+        "NOT EXPOSED";
+
+    char kernel_panthor[96] =
+        "NOT EXPOSED";
+
+    char kernel_panthor_backport[96] =
+        "NOT EXPOSED";
+
+    char kernel_drm_backport[96] =
+        "NOT EXPOSED";
+
+    tfb_menu_read_state_text(
+        "/sys/kernel/treeforge/release",
+        kernel_release,
+        sizeof(kernel_release)
+    );
+
+    tfb_menu_read_state_text(
+        "/sys/kernel/treeforge/linux_base",
+        kernel_linux_base,
+        sizeof(kernel_linux_base)
+    );
+
+    tfb_menu_read_state_text(
+        "/sys/kernel/treeforge/panthor",
+        kernel_panthor,
+        sizeof(kernel_panthor)
+    );
+
+    tfb_menu_read_state_text(
+        "/sys/kernel/treeforge/panthor_backport",
+        kernel_panthor_backport,
+        sizeof(kernel_panthor_backport)
+    );
+
+    tfb_menu_read_state_text(
+        "/sys/kernel/treeforge/drm_backport",
+        kernel_drm_backport,
+        sizeof(kernel_drm_backport)
+    );
+
+    u32 kernel_y =
+        kernel_box_y + 92U;
+
+    tfb_ui_draw_kv(
+        inner_x,
+        kernel_y,
+        "RELEASE",
+        kernel_release,
+        dim,
+        foreground
+    );
+
+    kernel_y += 48U;
+
+    tfb_ui_draw_kv(
+        inner_x,
+        kernel_y,
+        "LINUX BASE",
+        kernel_linux_base,
+        dim,
+        foreground
+    );
+
+    kernel_y += 48U;
+
+    tfb_ui_draw_kv(
+        inner_x,
+        kernel_y,
+        "PANTHOR",
+        kernel_panthor,
+        dim,
+        foreground
+    );
+
+    kernel_y += 48U;
+
+    tfb_ui_draw_kv(
+        inner_x,
+        kernel_y,
+        "PANTHOR BACKPORT",
+        kernel_panthor_backport,
+        dim,
+        foreground
+    );
+
+    kernel_y += 48U;
+
+    tfb_ui_draw_kv(
+        inner_x,
+        kernel_y,
+        "DRM BACKPORT",
+        kernel_drm_backport,
+        dim,
+        foreground
+    );
+
+
+    /*
+     * ------------------------------------------------------------
+     * SYSTEM
+     * ------------------------------------------------------------
+     */
+    const u32 system_box_y =
+        1000U;
+
+    /*
+     * TFB_SYSTEM_BOTTOM_ALIGNMENT_V1
+     *
+     * Keep the bottom edge aligned with the menu content baseline:
+     *
+     *   system_box_y  = 1000
+     *   content bottom = 1430
+     *   height = 430
+     */
+    const u32 system_box_height =
+        430U;
+
+    tfb_ui_fill_rect(
+        left_x,
+        system_box_y,
+        left_width,
+        system_box_height,
+        panel
+    );
+
+    tfb_ui_outline_rect(
+        left_x,
+        system_box_y,
+        left_width,
+        system_box_height,
+        4U,
+        border
+    );
+
+    tfb_ui_draw_text(
+        inner_x,
+        system_box_y + 30U,
+        "SYSTEM",
+        4U,
+        accent
+    );
+
     const u32 info_width =
         250U;
 
@@ -5150,325 +6018,61 @@ static void tfb_fb_render_menu(
         22U;
 
     const u32 c0 =
-        ix;
+        inner_x;
 
-    const u32 c1 = (
+    const u32 c1 =
         c0
         + info_width
-        + info_gap
-    );
+        + info_gap;
 
-    const u32 c2 = (
+    const u32 c2 =
         c1
         + info_width
-        + info_gap
-    );
+        + info_gap;
 
-    const u32 c3 = (
+    const u32 c3 =
         c2
         + info_width
-        + info_gap
-    );
+        + info_gap;
 
-    char storage_value[32] =
-        "UNKNOWN";
-
-    u64 storage_sectors = 0;
-
-    if (
-        tfb_ui_read_u64(
-            "/sys/block/sda/size",
-            &storage_sectors
-        )
-    ) {
-        tfb_ui_u64_text(
-            (
-                storage_sectors
-                * 512ULL
-                + 500000000ULL
-            )
-            / 1000000000ULL,
-            storage_value,
-            sizeof(storage_value)
-        );
-
-        tfb_ui_append(
-            storage_value,
-            sizeof(storage_value),
-            " GB"
-        );
-    }
-
-    char avb_state[32] =
-        "UNKNOWN";
-
-    tfb_ui_bootconfig_value(
-        "androidboot.verifiedbootstate",
-        avb_state,
-        sizeof(avb_state)
-    );
-
-    char device_state[32] =
-        "UNKNOWN";
-
-    tfb_ui_bootconfig_value(
-        "androidboot.vbmeta.device_state",
-        device_state,
-        sizeof(device_state)
-    );
-
-    /*
-     * DEVICE
-     */
-    tfb_ui_draw_text(
-        ix,
-        left_y + 40U,
-        "DEVICE",
-        4U,
-        accent
-    );
-
-    u32 device_row_1 =
-        left_y + 95U;
+    const u32 version_y =
+        system_box_y + 95U;
 
     tfb_ui_draw_field(
         c0,
-        device_row_1,
+        version_y,
         info_width,
-        "MODEL",
-        "PIXEL TABLET",
+        "BOOTSTRAP",
+        tfb_bootstrap_version,
         dim,
         foreground
     );
 
     tfb_ui_draw_field(
         c1,
-        device_row_1,
-        info_width,
-        "SOC",
-        "GS201",
-        dim,
-        foreground
-    );
-
-    tfb_ui_draw_field(
-        c2,
-        device_row_1,
-        info_width,
-        "MEMORY",
-        "8 GB",
-        dim,
-        foreground
-    );
-
-    tfb_ui_draw_field(
-        c3,
-        device_row_1,
-        info_width,
-        "STORAGE",
-        storage_value,
-        dim,
-        foreground
-    );
-
-    u32 device_row_2 =
-        left_y + 205U;
-
-    tfb_ui_draw_field(
-        c0,
-        device_row_2,
-        info_width,
-        "BOARD",
-        "TANGORPRO",
-        dim,
-        foreground
-    );
-
-    tfb_ui_draw_field(
-        c1,
-        device_row_2,
-        info_width,
-        "ACTIVE SLOT",
-        tfb_ui_boot_slot(),
-        dim,
-        foreground
-    );
-
-    tfb_ui_draw_field(
-        c2,
-        device_row_2,
-        info_width,
-        "AVB",
-        avb_state,
-        dim,
-        foreground
-    );
-
-    tfb_ui_draw_field(
-        c3,
-        device_row_2,
-        info_width,
-        "DEVICE STATE",
-        device_state,
-        dim,
-        foreground
-    );
-
-    /*
-     * BOOT INVENTORY
-     */
-    u32 inventory_y =
-        left_y + 340U;
-
-    tfb_ui_draw_text(
-        ix,
-        inventory_y,
-        "BOOT INVENTORY",
-        4U,
-        accent
-    );
-
-    inventory_y +=
-        65U;
-
-    tfb_ui_draw_boot_state(
-        ix,
-        inventory_y,
-        "ANDROID A",
-        "WORKING",
-        green
-    );
-
-    inventory_y +=
-        65U;
-
-    tfb_ui_draw_boot_state(
-        ix,
-        inventory_y,
-        "ANDROID B",
-        tfb_menu_state.full_ab
-            ? "INSTALLED - HANDOFF PENDING"
-            : "VIRTUAL A/B",
-        tfb_menu_state.full_ab
-            ? warning
-            : dim
-    );
-
-    inventory_y +=
-        65U;
-
-    tfb_ui_draw_boot_state(
-        ix,
-        inventory_y,
-        "ALTERNATE OS",
-        tfb_menu_state
-            .alternate_os_configured
-            ? tfb_menu_state
-                .alternate_os_name
-            : "NOT INSTALLED",
-        tfb_menu_state
-            .alternate_os_configured
-            ? green
-            : dim
-    );
-
-    inventory_y +=
-        65U;
-
-    tfb_ui_draw_boot_state(
-        ix,
-        inventory_y,
-        "RECOVERY",
-        "NOT IMPLEMENTED",
-        dim
-    );
-
-    inventory_y +=
-        65U;
-
-    tfb_ui_draw_boot_state(
-        ix,
-        inventory_y,
-        "ROOT",
-        "NOT IMPLEMENTED",
-        dim
-    );
-
-    /*
-     * SYSTEM
-     */
-    u32 system_y =
-        left_y + 775U;
-
-    tfb_ui_draw_text(
-        ix,
-        system_y,
-        "SYSTEM",
-        4U,
-        accent
-    );
-
-    u32 system_row_1 =
-        system_y + 60U;
-
-    tfb_ui_draw_field(
-        c0,
-        system_row_1,
+        version_y,
         info_width,
         "BOOT MANAGER",
-        "V2E",
-        dim,
-        foreground
-    );
-
-    tfb_ui_draw_field(
-        c1,
-        system_row_1,
-        info_width,
-        "RUNTIME ABI",
-        "V1",
+        tfb_version,
         dim,
         foreground
     );
 
     tfb_ui_draw_field(
         c2,
-        system_row_1,
+        version_y,
         info_width,
-        "AUTOBOOT",
-        "10 SEC",
+        "RUNTIME ABI",
+        tfb_runtime_abi_version,
         dim,
         foreground
     );
 
     tfb_ui_draw_field(
         c3,
-        system_row_1,
+        version_y,
         info_width,
-        "INPUT CANCEL",
-        "ENABLED",
-        dim,
-        green
-    );
-
-    u32 system_row_2 =
-        system_y + 145U;
-
-    tfb_ui_draw_field(
-        c0,
-        system_row_2,
-        info_width,
-        "DISPLAY",
-        "FB BRIDGE V1",
-        dim,
-        foreground
-    );
-
-    tfb_ui_draw_field(
-        c1,
-        system_row_2,
-        info_width,
-        "A/B MODE",
+        "A/B TYPE",
         tfb_menu_state.full_ab
             ? "FULL A/B"
             : "VIRTUAL A/B",
@@ -5476,67 +6080,106 @@ static void tfb_fb_render_menu(
         foreground
     );
 
-    tfb_ui_draw_field(
-        c2,
-        system_row_2,
-        info_width,
-        "PARTITIONS",
-        "LIVE READ ONLY",
-        dim,
-        green
-    );
 
-    tfb_ui_draw_field(
-        c3,
-        system_row_2,
-        info_width,
-        "ROOT",
-        "NOT IMPLEMENTED",
-        dim,
-        foreground
-    );
+    /*
+     * Live status row.
+     *
+     * ADB retains the existing dirty-region redraw behavior.
+     */
+    const u32 live_y =
+        1290U;
 
-    u32 system_row_3 =
-        system_y + 230U;
-
-    tfb_ui_draw_field(
-        c0,
-        system_row_3,
-        info_width,
-        "ANDROID HANDOFF",
-        "WORKING",
-        dim,
-        green
-    );
+    tfb_fb_render_adb_region();
 
     tfb_ui_draw_field(
         c1,
-        system_row_3,
+        live_y,
         info_width,
-        "BOOTLOADER",
-        "WORKING",
+        "TOUCH",
+        tfb_ui_marker_exists(
+            "/dev/treeforge-bootstrap-touchscreen-ready"
+        )
+            ? "WORKING"
+            : "UNAVAILABLE",
         dim,
-        green
+        tfb_ui_marker_exists(
+            "/dev/treeforge-bootstrap-touchscreen-ready"
+        )
+            ? green
+            : warning
     );
+
+
+    /*
+     * Battery percentage and charging state in one field.
+     *
+     * Examples:
+     *
+     *   51% / Charging
+     *   82% / Discharging
+     *   100% / Full
+     */
+    char battery_value[64] =
+        "UNKNOWN";
+
+    u64 battery_capacity = 0;
+
+    if (
+        tfb_ui_read_u64(
+            "/sys/class/power_supply/battery/capacity",
+            &battery_capacity
+        )
+    ) {
+        battery_value[0] =
+            '\0';
+
+        tfb_ui_u64_text(
+            battery_capacity,
+            battery_value,
+            sizeof(battery_value)
+        );
+
+        tfb_ui_append(
+            battery_value,
+            sizeof(battery_value),
+            "%"
+        );
+
+        char battery_state[32];
+
+        if (
+            tfb_menu_read_state_text(
+                "/sys/class/power_supply/battery/status",
+                battery_state,
+                sizeof(battery_state)
+            )
+        ) {
+            tfb_ui_append(
+                battery_value,
+                sizeof(battery_value),
+                " / "
+            );
+
+            tfb_ui_append(
+                battery_value,
+                sizeof(battery_value),
+                battery_state
+            );
+        }
+    }
 
     tfb_ui_draw_field(
         c2,
-        system_row_3,
-        info_width,
-        "LIVE LOGGER",
-        "WORKING",
+        live_y,
+        (
+            info_width
+            * 2U
+            + info_gap
+        ),
+        "BATTERY",
+        battery_value,
         dim,
-        green
-    );
-
-    tfb_ui_draw_field(
-        c3,
-        system_row_3,
-        info_width,
-        "ADB RESET",
-        "WORKING",
-        dim,
-        green
+        foreground
     );
 
 
@@ -5572,15 +6215,27 @@ static void tfb_fb_render_menu(
         foreground
     );
 
-    tfb_ui_draw_text_fit(
-        geometry.x,
-        260U,
-        page->subtitle,
-        geometry.width,
-        3U,
-        2U,
-        dim
-    );
+    /*
+     * TFB_HOME_SUBTITLE_SUPPRESSED_V1
+     *
+     * The profile schema requires a non-empty subtitle, but Home
+     * intentionally renders only its page title.
+     */
+    if (
+        !tfb_ui_home_page(
+            page
+        )
+    ) {
+        tfb_ui_draw_text_fit(
+            geometry.x,
+            260U,
+            page->subtitle,
+            geometry.width,
+            3U,
+            2U,
+            dim
+        );
+    }
 
     if (
         tfb_ui_partition_page(
@@ -5590,6 +6245,28 @@ static void tfb_fb_render_menu(
         tfb_ui_render_partition_information(
             &geometry
         );
+    }
+
+
+    if (
+        tfb_ui_component_versions_page(
+            page
+        )
+    ) {
+        tfb_ui_render_component_versions(
+            &geometry,
+            accent,
+            dim,
+            foreground
+        );
+
+        tfb_fb_render_status_region(
+            page,
+            elapsed_ms,
+            timeout_fired
+        );
+
+        return;
     }
 
 
@@ -6201,6 +6878,30 @@ static int tfb_reboot_to(
         : -1
     );
 }
+
+static int tfb_reboot_system(
+    void
+) {
+    tfb_syscall1(
+        SYS_SYNC,
+        0
+    );
+
+    long result = tfb_syscall4(
+        SYS_REBOOT,
+        LINUX_REBOOT_MAGIC1,
+        LINUX_REBOOT_MAGIC2,
+        LINUX_REBOOT_CMD_RESTART,
+        0
+    );
+
+    return (
+        result == 0
+        ? 0
+        : -1
+    );
+}
+
 
 #define SYS_KILL 129
 #define SYS_CLONE 220
@@ -7423,9 +8124,9 @@ static void tfb_prepare_shell_compat(void) {
  *   goog_touch_interface.ko
  *   nvt_touch.ko
  *
- * Realize them from /vendor/lib/modules with the retained TreeForge
- * BusyBox provider.  Never duplicate these kernel modules into the
- * Bootstrap runtime.
+ * Resolve them from the coherent live /vendor_dlkm module tree using
+ * uname -r and the retained TreeForge BusyBox provider. Never duplicate
+ * these kernel modules into the Bootstrap runtime.
  *
  * This path is deliberately non-fatal.  Volume Up/Down/Power remain
  * the recovery input path if touchscreen realization fails.
@@ -7459,9 +8160,6 @@ static int tfb_busybox_insmod_if_missing(
         !tfb_probe_readable_path(
             busybox
         )
-        || !tfb_probe_readable_path(
-            module_path
-        )
     ) {
         tfb_log(
             failed_log
@@ -7491,7 +8189,8 @@ static int tfb_busybox_insmod_if_missing(
     if (child == 0) {
         char *argv[] = {
             (char *) busybox,
-            (char *) "insmod",
+            (char *) "sh",
+            (char *) "-c",
             (char *) module_path,
             0
         };
@@ -7550,7 +8249,7 @@ static int tfb_realize_touchscreen_modules(
     if (
         !tfb_busybox_insmod_if_missing(
             "/sys/module/goog_usi_stylus",
-            "/vendor/lib/modules/goog_usi_stylus.ko",
+            "exec /dev/treeforge-bootstrap-runtime/system/bin/busybox insmod /vendor_dlkm/lib/modules/$(/dev/treeforge-bootstrap-runtime/system/bin/busybox uname -r)/extra/private/google-modules/touch/common/usi/goog_usi_stylus.ko",
             "touchscreen module=goog_usi_stylus state=already-loaded",
             "touchscreen module=goog_usi_stylus state=loaded",
             "touchscreen module=goog_usi_stylus state=failed",
@@ -7571,7 +8270,7 @@ static int tfb_realize_touchscreen_modules(
     if (
         !tfb_busybox_insmod_if_missing(
             "/sys/module/goog_touch_interface",
-            "/vendor/lib/modules/goog_touch_interface.ko",
+            "exec /dev/treeforge-bootstrap-runtime/system/bin/busybox insmod /vendor_dlkm/lib/modules/$(/dev/treeforge-bootstrap-runtime/system/bin/busybox uname -r)/extra/private/google-modules/touch/common/goog_touch_interface.ko",
             "touchscreen module=goog_touch_interface state=already-loaded",
             "touchscreen module=goog_touch_interface state=loaded",
             "touchscreen module=goog_touch_interface state=failed",
@@ -7592,7 +8291,7 @@ static int tfb_realize_touchscreen_modules(
     if (
         !tfb_busybox_insmod_if_missing(
             "/sys/module/nvt_touch",
-            "/vendor/lib/modules/nvt_touch.ko",
+            "exec /dev/treeforge-bootstrap-runtime/system/bin/busybox insmod /vendor_dlkm/lib/modules/$(/dev/treeforge-bootstrap-runtime/system/bin/busybox uname -r)/extra/private/google-modules/touch/novatek/nt36xxx/nvt_touch.ko",
             "touchscreen module=nvt_touch state=already-loaded",
             "touchscreen module=nvt_touch state=loaded",
             "touchscreen module=nvt_touch state=failed",
@@ -8832,6 +9531,768 @@ static void tfb_altroot_cleanup_partial(
 }
 
 
+static const char *tfb_altroot_init_path =
+    "/init";
+
+
+/*
+ * TFB_ALTROOT_IDENTITY_V1
+ *
+ * Read operating-system identity from the OS itself.
+ *
+ * Supported contracts, in preference order:
+ *
+ *   /etc/treeforge-release  optional TreeForge extension
+ *   /etc/os-release         standard Linux identity
+ *   /etc/lsb-release        additional distro/build metadata
+ *
+ * Missing fields remain empty and are omitted from the UI.
+ */
+static void tfb_altroot_identity_clear(
+    void
+) {
+    tfb_menu_state
+        .alternate_os_detected_name[0] =
+        '\0';
+
+    tfb_menu_state
+        .alternate_os_version[0] =
+        '\0';
+
+    tfb_menu_state
+        .alternate_os_build[0] =
+        '\0';
+
+    tfb_menu_state
+        .alternate_os_milestone[0] =
+        '\0';
+
+    tfb_menu_state
+        .alternate_os_board[0] =
+        '\0';
+}
+
+
+static int tfb_altroot_key_equal(
+    const char *data,
+    usize begin,
+    usize end,
+    const char *key
+) {
+    if (
+        !data
+        || !key
+        || begin >= end
+    ) {
+        return 0;
+    }
+
+    usize position = begin;
+    usize key_index = 0;
+
+    while (
+        position < end
+        && key[key_index] != '\0'
+    ) {
+        if (
+            data[position]
+            != key[key_index]
+        ) {
+            return 0;
+        }
+
+        position++;
+        key_index++;
+    }
+
+    return (
+        position == end
+        && key[key_index] == '\0'
+    );
+}
+
+
+static int tfb_altroot_copy_value(
+    const char *data,
+    usize begin,
+    usize end,
+    char *output,
+    usize capacity
+) {
+    if (
+        !data
+        || !output
+        || capacity < 2
+    ) {
+        return 0;
+    }
+
+    while (
+        begin < end
+        && (
+            data[begin] == ' '
+            || data[begin] == '\t'
+        )
+    ) {
+        begin++;
+    }
+
+    while (
+        end > begin
+        && (
+            data[end - 1] == ' '
+            || data[end - 1] == '\t'
+        )
+    ) {
+        end--;
+    }
+
+    if (
+        end > begin + 1
+        && (
+            (
+                data[begin] == '"'
+                && data[end - 1] == '"'
+            )
+            || (
+                data[begin] == '\''
+                && data[end - 1] == '\''
+            )
+        )
+    ) {
+        begin++;
+        end--;
+    }
+
+    usize out = 0;
+
+    while (
+        begin < end
+        && out + 1 < capacity
+    ) {
+        unsigned char value = (
+            (unsigned char)
+            data[begin]
+        );
+
+        if (
+            value < 0x20
+            || value > 0x7e
+        ) {
+            output[0] = '\0';
+            return 0;
+        }
+
+        output[out++] =
+            data[begin++];
+    }
+
+    output[out] =
+        '\0';
+
+    return out > 0;
+}
+
+
+static int tfb_altroot_read_release_value(
+    const char *path,
+    const char *key,
+    char *output,
+    usize capacity
+) {
+    if (
+        !path
+        || !key
+        || !output
+        || capacity < 2
+    ) {
+        return 0;
+    }
+
+    long fd = tfb_open(
+        path,
+        O_RDONLY
+        | O_NONBLOCK
+    );
+
+    if (fd < 0) {
+        return 0;
+    }
+
+    char data[4096];
+
+    long amount = tfb_syscall3(
+        SYS_READ,
+        fd,
+        (long) data,
+        sizeof(data) - 1
+    );
+
+    tfb_close(
+        fd
+    );
+
+    if (amount <= 0) {
+        return 0;
+    }
+
+    usize length =
+        (usize) amount;
+
+    if (
+        length
+        >= sizeof(data)
+    ) {
+        length =
+            sizeof(data) - 1;
+    }
+
+    data[length] =
+        '\0';
+
+    usize position = 0;
+
+    while (
+        position < length
+    ) {
+        usize line_begin =
+            position;
+
+        usize line_end =
+            line_begin;
+
+        while (
+            line_end < length
+            && data[line_end] != '\n'
+            && data[line_end] != '\r'
+        ) {
+            line_end++;
+        }
+
+        position =
+            line_end;
+
+        while (
+            position < length
+            && (
+                data[position] == '\n'
+                || data[position] == '\r'
+            )
+        ) {
+            position++;
+        }
+
+        while (
+            line_begin < line_end
+            && (
+                data[line_begin] == ' '
+                || data[line_begin] == '\t'
+            )
+        ) {
+            line_begin++;
+        }
+
+        if (
+            line_begin >= line_end
+            || data[line_begin] == '#'
+        ) {
+            continue;
+        }
+
+        usize equal =
+            line_begin;
+
+        while (
+            equal < line_end
+            && data[equal] != '='
+        ) {
+            equal++;
+        }
+
+        if (
+            equal >= line_end
+        ) {
+            continue;
+        }
+
+        usize key_end =
+            equal;
+
+        while (
+            key_end > line_begin
+            && (
+                data[key_end - 1] == ' '
+                || data[key_end - 1] == '\t'
+            )
+        ) {
+            key_end--;
+        }
+
+        if (
+            !tfb_altroot_key_equal(
+                data,
+                line_begin,
+                key_end,
+                key
+            )
+        ) {
+            continue;
+        }
+
+        return (
+            tfb_altroot_copy_value(
+                data,
+                equal + 1,
+                line_end,
+                output,
+                capacity
+            )
+        );
+    }
+
+    return 0;
+}
+
+
+static void tfb_altroot_try_release_value(
+    const char *path,
+    const char *key,
+    char *output,
+    usize capacity
+) {
+    if (
+        output
+        && capacity > 1
+        && output[0] == '\0'
+    ) {
+        tfb_altroot_read_release_value(
+            path,
+            key,
+            output,
+            capacity
+        );
+    }
+}
+
+
+static void tfb_altroot_copy_literal(
+    char *output,
+    usize capacity,
+    const char *value
+) {
+    if (
+        !output
+        || capacity < 2
+        || !value
+    ) {
+        return;
+    }
+
+    usize index = 0;
+
+    while (
+        value[index] != '\0'
+        && index + 1 < capacity
+    ) {
+        output[index] =
+            value[index];
+
+        index++;
+    }
+
+    output[index] =
+        '\0';
+}
+
+
+static void tfb_altroot_collect_identity(
+    void
+) {
+    tfb_altroot_identity_clear();
+
+    static const char treeforge_release[] =
+        "/mnt/treeforge-altroot/etc/treeforge-release";
+
+    static const char os_release[] =
+        "/mnt/treeforge-altroot/etc/os-release";
+
+    static const char lsb_release[] =
+        "/mnt/treeforge-altroot/etc/lsb-release";
+
+    /*
+     * Optional TreeForge metadata contract.
+     */
+    tfb_altroot_try_release_value(
+        treeforge_release,
+        "TREEFORGE_OS_NAME",
+        tfb_menu_state
+            .alternate_os_detected_name,
+        sizeof(
+            tfb_menu_state
+                .alternate_os_detected_name
+        )
+    );
+
+    tfb_altroot_try_release_value(
+        treeforge_release,
+        "NAME",
+        tfb_menu_state
+            .alternate_os_detected_name,
+        sizeof(
+            tfb_menu_state
+                .alternate_os_detected_name
+        )
+    );
+
+    tfb_altroot_try_release_value(
+        treeforge_release,
+        "TREEFORGE_OS_VERSION",
+        tfb_menu_state
+            .alternate_os_version,
+        sizeof(
+            tfb_menu_state
+                .alternate_os_version
+        )
+    );
+
+    tfb_altroot_try_release_value(
+        treeforge_release,
+        "VERSION",
+        tfb_menu_state
+            .alternate_os_version,
+        sizeof(
+            tfb_menu_state
+                .alternate_os_version
+        )
+    );
+
+    tfb_altroot_try_release_value(
+        treeforge_release,
+        "TREEFORGE_OS_BUILD",
+        tfb_menu_state
+            .alternate_os_build,
+        sizeof(
+            tfb_menu_state
+                .alternate_os_build
+        )
+    );
+
+    tfb_altroot_try_release_value(
+        treeforge_release,
+        "BUILD",
+        tfb_menu_state
+            .alternate_os_build,
+        sizeof(
+            tfb_menu_state
+                .alternate_os_build
+        )
+    );
+
+    tfb_altroot_try_release_value(
+        treeforge_release,
+        "TREEFORGE_OS_MILESTONE",
+        tfb_menu_state
+            .alternate_os_milestone,
+        sizeof(
+            tfb_menu_state
+                .alternate_os_milestone
+        )
+    );
+
+    tfb_altroot_try_release_value(
+        treeforge_release,
+        "MILESTONE",
+        tfb_menu_state
+            .alternate_os_milestone,
+        sizeof(
+            tfb_menu_state
+                .alternate_os_milestone
+        )
+    );
+
+    tfb_altroot_try_release_value(
+        treeforge_release,
+        "TREEFORGE_OS_BOARD",
+        tfb_menu_state
+            .alternate_os_board,
+        sizeof(
+            tfb_menu_state
+                .alternate_os_board
+        )
+    );
+
+    tfb_altroot_try_release_value(
+        treeforge_release,
+        "BOARD",
+        tfb_menu_state
+            .alternate_os_board,
+        sizeof(
+            tfb_menu_state
+                .alternate_os_board
+        )
+    );
+
+    /*
+     * Standard Linux os-release.
+     */
+    tfb_altroot_try_release_value(
+        os_release,
+        "PRETTY_NAME",
+        tfb_menu_state
+            .alternate_os_detected_name,
+        sizeof(
+            tfb_menu_state
+                .alternate_os_detected_name
+        )
+    );
+
+    tfb_altroot_try_release_value(
+        os_release,
+        "NAME",
+        tfb_menu_state
+            .alternate_os_detected_name,
+        sizeof(
+            tfb_menu_state
+                .alternate_os_detected_name
+        )
+    );
+
+    tfb_altroot_try_release_value(
+        os_release,
+        "VERSION",
+        tfb_menu_state
+            .alternate_os_version,
+        sizeof(
+            tfb_menu_state
+                .alternate_os_version
+        )
+    );
+
+    tfb_altroot_try_release_value(
+        os_release,
+        "VERSION_ID",
+        tfb_menu_state
+            .alternate_os_version,
+        sizeof(
+            tfb_menu_state
+                .alternate_os_version
+        )
+    );
+
+    tfb_altroot_try_release_value(
+        os_release,
+        "BUILD_ID",
+        tfb_menu_state
+            .alternate_os_build,
+        sizeof(
+            tfb_menu_state
+                .alternate_os_build
+        )
+    );
+
+    /*
+     * LSB/ChromiumOS release metadata. These are metadata-key
+     * adapters only; no OS identity is assigned by Bootstrap.
+     */
+    tfb_altroot_try_release_value(
+        lsb_release,
+        "CHROMEOS_RELEASE_NAME",
+        tfb_menu_state
+            .alternate_os_detected_name,
+        sizeof(
+            tfb_menu_state
+                .alternate_os_detected_name
+        )
+    );
+
+    tfb_altroot_try_release_value(
+        lsb_release,
+        "DISTRIB_DESCRIPTION",
+        tfb_menu_state
+            .alternate_os_detected_name,
+        sizeof(
+            tfb_menu_state
+                .alternate_os_detected_name
+        )
+    );
+
+    tfb_altroot_try_release_value(
+        lsb_release,
+        "DISTRIB_ID",
+        tfb_menu_state
+            .alternate_os_detected_name,
+        sizeof(
+            tfb_menu_state
+                .alternate_os_detected_name
+        )
+    );
+
+    tfb_altroot_try_release_value(
+        lsb_release,
+        "CHROMEOS_RELEASE_VERSION",
+        tfb_menu_state
+            .alternate_os_version,
+        sizeof(
+            tfb_menu_state
+                .alternate_os_version
+        )
+    );
+
+    tfb_altroot_try_release_value(
+        lsb_release,
+        "DISTRIB_RELEASE",
+        tfb_menu_state
+            .alternate_os_version,
+        sizeof(
+            tfb_menu_state
+                .alternate_os_version
+        )
+    );
+
+    tfb_altroot_try_release_value(
+        lsb_release,
+        "CHROMEOS_RELEASE_BUILD_NUMBER",
+        tfb_menu_state
+            .alternate_os_build,
+        sizeof(
+            tfb_menu_state
+                .alternate_os_build
+        )
+    );
+
+    tfb_altroot_try_release_value(
+        lsb_release,
+        "CHROMEOS_RELEASE_CHROME_MILESTONE",
+        tfb_menu_state
+            .alternate_os_milestone,
+        sizeof(
+            tfb_menu_state
+                .alternate_os_milestone
+        )
+    );
+
+    tfb_altroot_try_release_value(
+        lsb_release,
+        "CHROMEOS_RELEASE_BOARD",
+        tfb_menu_state
+            .alternate_os_board,
+        sizeof(
+            tfb_menu_state
+                .alternate_os_board
+        )
+    );
+
+    if (
+        tfb_menu_state
+            .alternate_os_detected_name[0]
+        == '\0'
+    ) {
+        tfb_altroot_copy_literal(
+            tfb_menu_state
+                .alternate_os_detected_name,
+            sizeof(
+                tfb_menu_state
+                    .alternate_os_detected_name
+            ),
+            "Unknown OS"
+        );
+    }
+}
+
+
+/*
+ * TFB_ALTROOT_INSTALLED_PROBE_V1
+ *
+ * Menu inventory must describe the actual storage-backed operating
+ * system, not the presence of optional metadata.
+ *
+ * This probe is deliberately read-only. It realizes the existing
+ * kernel block topology, mounts treeforge_os read-only, validates a
+ * recognized root contract, then detaches the probe mount.
+ */
+static int tfb_altroot_installed(
+    void
+) {
+    tfb_altroot_cleanup_partial();
+
+    if (
+        tfb_realize_block_nodes()
+        != 0
+    ) {
+        return 0;
+    }
+
+    tfb_altroot_mkdir(
+        "/mnt",
+        0755
+    );
+
+    if (
+        !tfb_altroot_mkdir(
+            TFB_ALTROOT_ROOT,
+            0755
+        )
+    ) {
+        return 0;
+    }
+
+    if (
+        tfb_altroot_mount(
+            TFB_ALTROOT_STORAGE,
+            TFB_ALTROOT_ROOT,
+            TFB_ALTROOT_STORAGE_FS,
+            MS_RDONLY,
+            0
+        ) < 0
+    ) {
+        return 0;
+    }
+
+    int installed = 0;
+
+    /*
+     * Legacy/current TreeForge-native root contract.
+     */
+    if (
+        tfb_probe_readable_path(
+            "/mnt/treeforge-altroot/init"
+        )
+        && tfb_probe_readable_path(
+            "/mnt/treeforge-altroot/"
+            "TREEFORGE_ROOTFS_V1"
+        )
+    ) {
+        installed = 1;
+    }
+
+    /*
+     * Conventional Linux root contract used by the current
+     * ChromiumOS installation.
+     */
+    if (
+        !installed
+        && tfb_probe_readable_path(
+            "/mnt/treeforge-altroot/sbin/init"
+        )
+        && tfb_probe_readable_path(
+            "/mnt/treeforge-altroot/etc/os-release"
+        )
+    ) {
+        installed = 1;
+    }
+
+    if (installed) {
+        tfb_altroot_collect_identity();
+    } else {
+        tfb_altroot_identity_clear();
+    }
+
+    tfb_altroot_cleanup_partial();
+
+    return installed;
+}
+
+
 static int tfb_altroot_prepare(
     void
 ) {
@@ -9018,21 +10479,47 @@ static int tfb_altroot_prepare(
     }
 
     /*
-     * Storage-backed alternate userspace V1.
+     * Storage-backed alternate userspace.
      *
-     * Pixel Partitioner owns treeforge_os. The alternate rootfs is
-     * already provisioned there. Bootstrap requires only the native
-     * PID 1 and the rootfs ownership marker.
+     * Legacy TreeForge diagnostic roots use /init and the
+     * TREEFORGE_ROOTFS_V1 ownership marker.
+     *
+     * Conventional Linux roots, including the current ChromiumOS
+     * installation, may expose native PID 1 as /sbin/init.
+     *
+     * Detection is read-only. Bootstrap must not persistently alter
+     * treeforge_os merely to satisfy the handoff contract.
      */
     if (
-        !tfb_probe_readable_path(
+        tfb_probe_readable_path(
             "/mnt/treeforge-altroot/init"
         )
-        || !tfb_probe_readable_path(
+        && tfb_probe_readable_path(
             "/mnt/treeforge-altroot/"
             "TREEFORGE_ROOTFS_V1"
         )
     ) {
+        tfb_altroot_init_path =
+            "/init";
+
+        tfb_log(
+            "altroot-storage=contract-treeforge-v1"
+        );
+    } else if (
+        tfb_probe_readable_path(
+            "/mnt/treeforge-altroot/sbin/init"
+        )
+        && tfb_probe_readable_path(
+            "/mnt/treeforge-altroot/etc/os-release"
+        )
+    ) {
+        tfb_altroot_init_path =
+            "/sbin/init";
+
+        tfb_log(
+            "altroot-storage=contract-native-sbin-init"
+        );
+    } else {
         tfb_log(
             "altroot-storage=payload-missing"
         );
@@ -9046,75 +10533,12 @@ static int tfb_altroot_prepare(
     );
 
     /*
-     * Preserve the accepted diagnostic ADB shell compatibility used by
-     * the existing storage-backed canary. The alternate PID 1 remains
-     * completely native; BusyBox stays in Bootstrap's retained /dev
-     * runtime and is not part of the alternate rootfs payload.
+     * TreeForge Bootstrap adbd already launches its retained BusyBox
+     * directly from /dev/treeforge-bootstrap-runtime. Do not unlink,
+     * replace, or otherwise modify the alternate OS's native shells.
      */
-
-    /*
-     * TFB_ALTROOT_NATIVE_SHELL_PRESERVE_V1
-     *
-     * Preserve a native operating system's shell.
-     * Supply retained BusyBox only when a shell is absent.
-     */
-    const char *diagnostic_busybox =
-        TFB_ALTROOT_LOADER_BUSYBOX;
-
-    if (
-        !tfb_probe_readable_path(
-            "/mnt/treeforge-altroot/bin/sh"
-        )
-    ) {
-        long rc = tfb_syscall3(
-            SYS_SYMLINKAT,
-            (long) diagnostic_busybox,
-            AT_FDCWD,
-            (long) "/mnt/treeforge-altroot/bin/sh"
-        );
-
-        if (
-            rc < 0
-            || !tfb_probe_readable_path(
-                "/mnt/treeforge-altroot/bin/sh"
-            )
-        ) {
-            tfb_log("altroot-shell=fallback-failed");
-            tfb_altroot_cleanup_partial();
-            return 0;
-        }
-
-        tfb_log("altroot-shell=bootstrap-fallback");
-    } else {
-        tfb_log("altroot-native-shell=preserved");
-    }
-
-    if (
-        !tfb_probe_readable_path(
-            "/mnt/treeforge-altroot/system/bin/sh"
-        )
-    ) {
-        long rc = tfb_syscall3(
-            SYS_SYMLINKAT,
-            (long) diagnostic_busybox,
-            AT_FDCWD,
-            (long) "/mnt/treeforge-altroot/system/bin/sh"
-        );
-
-        if (
-            rc < 0
-            || !tfb_probe_readable_path(
-                "/mnt/treeforge-altroot/system/bin/sh"
-            )
-        ) {
-            tfb_log("altroot-adb-shell=failed");
-            tfb_altroot_cleanup_partial();
-            return 0;
-        }
-    }
-
     tfb_log(
-        "altroot-test=diagnostic-shell-compat-ready"
+        "altroot-test=rootfs-shells-preserved"
     );
 
     tfb_log(
@@ -9198,12 +10622,12 @@ static void tfb_altroot_pivot_and_exec(
     );
 
     char *alt_argv[] = {
-        (char *) "/init",
+        (char *) tfb_altroot_init_path,
         0
     };
 
     char *alt_envp[] = {
-        (char *) "PATH=/bin:/system/bin",
+        (char *) "PATH=/bin:/sbin:/usr/bin:/usr/sbin:/system/bin",
         (char *) "HOME=/",
         (char *) "TERM=linux",
         0
@@ -9211,7 +10635,7 @@ static void tfb_altroot_pivot_and_exec(
 
     tfb_syscall3(
         SYS_EXECVE,
-        (long) "/init",
+        (long) tfb_altroot_init_path,
         (long) alt_argv,
         (long) alt_envp
     );
@@ -9959,6 +11383,28 @@ static void tfb_menu_execute_action(
 
     if (
         action
+        == TFB_ACTION_REBOOT_SYSTEM
+    ) {
+        tfb_log(
+            "early-menu action=reboot_system"
+        );
+
+        tfb_menu_cleanup_for_transition(
+            inputs,
+            created_input_directory,
+            created_input_nodes
+        );
+
+        tfb_reboot_system();
+
+        tfb_transition_failure(
+            "system-reboot-returned"
+        );
+    }
+
+
+    if (
+        action
         == TFB_ACTION_REBOOT_BOOTLOADER
     ) {
         tfb_log(
@@ -10186,6 +11632,19 @@ static int tfb_menu_touch_row(
     int raw_x,
     int raw_y
 ) {
+    /*
+     * TFB_TOUCH_RENDER_GEOMETRY_SYNC_V1
+     *
+     * Hit testing intentionally has no independent Home layout.
+     *
+     * The renderer is the geometry authority.  Whatever rows
+     * tfb_ui_menu_geometry() gives the framebuffer are exactly the
+     * rows accepted here.
+     *
+     * This prevents visual/input drift when Home gains or loses an
+     * entry, including the Iteration-3 promotion of Boot Options from
+     * the old Resume/settings-square row into its own full-width row.
+     */
     if (
         !page
         || !tfb_fb_menu_active
@@ -10210,7 +11669,7 @@ static int tfb_menu_touch_row(
     }
 
     /*
-     * Inverse of the renderer's clockwise
+     * Inverse of the framebuffer renderer's clockwise
      * logical-landscape transform.
      *
      * raw panel:  1600 x 2560
@@ -10253,95 +11712,6 @@ static int tfb_menu_touch_row(
         return -1;
     }
 
-    u32 step = (
-        geometry.row_height
-        + geometry.row_gap
-    );
-
-    /*
-     * Home's first visual row contains two independently
-     * selectable entries:
-     *
-     *   Resume       -> index 0
-     *   settings     -> index 1
-     */
-    if (
-        tfb_ui_home_page(
-            page
-        )
-        && geometry.item_count >= 2
-    ) {
-        u32 first_y =
-            geometry.y;
-
-        if (
-            logical_y >= first_y
-            && logical_y
-                < first_y
-                    + geometry.row_height
-        ) {
-            u32 settings_x = (
-                geometry.x
-                + geometry.width
-                - geometry.row_height
-            );
-
-            u32 resume_end = (
-                settings_x
-                > geometry.row_gap
-                    ? settings_x
-                        - geometry.row_gap
-                    : settings_x
-            );
-
-            if (
-                logical_x >= settings_x
-            ) {
-                return 1;
-            }
-
-            if (
-                logical_x < resume_end
-            ) {
-                return 0;
-            }
-
-            /*
-             * Gap between Resume and settings.
-             */
-            return -1;
-        }
-
-        for (
-            int index = 2;
-            index < geometry.item_count;
-            index++
-        ) {
-            u32 visual_row =
-                (u32) (index - 1);
-
-            u32 row_y = (
-                geometry.y
-                + visual_row * step
-            );
-
-            if (
-                logical_y >= row_y
-                && logical_y
-                    < row_y
-                        + geometry.row_height
-            ) {
-                return index;
-            }
-        }
-
-        return -1;
-    }
-
-    /*
-     * All other pages retain the original one-entry-per-row
-     * hit-test model.
-     */
     for (
         int index = 0;
         index < geometry.item_count;
@@ -10349,9 +11719,16 @@ static int tfb_menu_touch_row(
     ) {
         u32 row_y = (
             geometry.y
-            + (u32) index * step
+            + (u32) index
+                * (
+                    geometry.row_height
+                    + geometry.row_gap
+                )
         );
 
+        /*
+         * Gaps between cards are intentionally not clickable.
+         */
         if (
             logical_y >= row_y
             && logical_y
@@ -13450,6 +14827,9 @@ void _start(void) {
             MenuAction.TOGGLE_ROOT_PERSISTENCE:
                 "TFB_ACTION_TOGGLE_ROOT_PERSISTENCE",
 
+            MenuAction.REBOOT_SYSTEM:
+                "TFB_ACTION_REBOOT_SYSTEM",
+
             MenuAction.REBOOT_BOOTLOADER:
                 "TFB_ACTION_REBOOT_BOOTLOADER",
 
@@ -13788,9 +15168,7 @@ void _start(void) {
 
     @staticmethod
     def _project_version() -> str:
-        # TreeForge Bootstrap owns this dispatcher independently
-        # from the TreeForge Bootstrap repository.
-        return "1.0"
+        return boot_manager_version()
 
 
 
@@ -13897,20 +15275,45 @@ void _start(void) {
             / "treeforge-bootstrap-dispatch"
         )
 
-        placeholder = (
+        bootstrap_placeholder = (
             "__TREEFORGE_BOOTSTRAP_VERSION__"
         )
 
-        if (
-            cls._SOURCE.count(
-                placeholder
-            )
-            != 1
+        placeholder = (
+            "__TREEFORGE_BOOT_MANAGER_VERSION__"
+        )
+
+        runtime_abi_placeholder = (
+            "__TREEFORGE_RUNTIME_ABI_VERSION__"
+        )
+
+        for (
+            version_placeholder,
+            label,
+        ) in (
+            (
+                bootstrap_placeholder,
+                "TreeForge Bootstrap",
+            ),
+            (
+                placeholder,
+                "TreeForge Boot Manager",
+            ),
+            (
+                runtime_abi_placeholder,
+                "TreeForge Runtime ABI",
+            ),
         ):
-            raise TreeForgeDispatcherError(
-                "TreeForge Bootstrap version "
-                "placeholder is not unique"
-            )
+            if (
+                cls._SOURCE.count(
+                    version_placeholder
+                )
+                != 1
+            ):
+                raise TreeForgeDispatcherError(
+                    label
+                    + " version placeholder is not unique"
+                )
 
         profile_placeholder = (
             "__TREEFORGE_MENU_PROFILE__"
@@ -13930,8 +15333,18 @@ void _start(void) {
         generated_source = (
             cls._SOURCE
             .replace(
+                bootstrap_placeholder,
+                project_version(),
+                1,
+            )
+            .replace(
                 placeholder,
                 cls._project_version(),
+                1,
+            )
+            .replace(
+                runtime_abi_placeholder,
+                runtime_abi_version(),
                 1,
             )
             .replace(
@@ -14028,38 +15441,3 @@ __all__ = (
     "TreeForgeDispatcherBuilder",
     "TreeForgeDispatcherError",
 )
-
-
-# Only ChromiumOS receives the versioned touchscreen resolver.
-from .paths import BUILD_PROFILE as _tfb_profile
-from .paths import REPOSITORY_ROOT as _tfb_root
-
-if _tfb_profile == "treeforge-chromiumos":
-    import hashlib as _tfb_hashlib
-    import json as _tfb_json
-
-    _tfb_overlay = _tfb_json.loads(
-        (
-            _tfb_root
-            / "profiles/treeforge-chromiumos/dispatcher-overlay.json"
-        ).read_text()
-    )
-    _tfb_original = TreeForgeDispatcherBuilder._SOURCE
-
-    def _tfb_sha(text):
-        return _tfb_hashlib.sha256(text.encode()).hexdigest()
-
-    if _tfb_sha(_tfb_original) != _tfb_overlay["base_sha256"]:
-        raise TreeForgeDispatcherError("Dispatcher base changed")
-
-    if _tfb_original.count(_tfb_overlay["before"]) != 1:
-        raise TreeForgeDispatcherError("Touchscreen anchor changed")
-
-    _tfb_updated = _tfb_original.replace(
-        _tfb_overlay["before"], _tfb_overlay["after"], 1
-    )
-
-    if _tfb_sha(_tfb_updated) != _tfb_overlay["variant_sha256"]:
-        raise TreeForgeDispatcherError("ChromiumOS dispatcher mismatch")
-
-    TreeForgeDispatcherBuilder._SOURCE = _tfb_updated

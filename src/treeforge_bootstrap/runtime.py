@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .version import runtime_abi_version
+
 import hashlib
 import json
 import os
@@ -12,6 +14,10 @@ from .canonical_initramfs import (
     validate_canonical_initramfs,
 )
 from .newc import read_newc_archive
+from .version import (
+    project_version,
+    runtime_identity,
+)
 from .paths import BUILD_PROFILE
 from .paths import (
     INITRAMFS_ROOT,
@@ -73,24 +79,33 @@ RUNTIME_METADATA = (
 
 
 #
-# Hardware-accepted v1.0b3 frozen runtime identities.
+# v1.0b4 hardware-candidate frozen runtime identities.
 #
 # These identify the exact payload published by the TreeForge Bootstrap
 # runtime provider. They intentionally do not require the canonical
 # Google init_boot seed: reconstruction verification remains the job of
 # verify_runtime().
 #
-FROZEN_RUNTIME_CPIO_SHA256 = "f06b2cdc81f592cfdfc6bbd928af65c4e53ab3990e8aad1a56193029b557bd65"
+FROZEN_RUNTIME_CPIO_SHA256 = (
+    "fdd9260eee0a5026af8c811ddfa762d9"
+    "03fd80f158caff960414081c195e7536"
+)
 
-FROZEN_RUNTIME_CPIO_BYTES = 15_580_296
+FROZEN_RUNTIME_CPIO_BYTES = 15_584_512
 
-FROZEN_RUNTIME_LZ4_SHA256 = "6c8573046733303d36f6ffaeb208ff30a527eaf1fbf68f7490f0dd6c540ba9bf"
+FROZEN_RUNTIME_LZ4_SHA256 = (
+    "9d53d60140f64bc23f11d27a03c9df2a"
+    "29c6159f3a811037aaac8c0a6ce6dc47"
+)
 
-FROZEN_RUNTIME_LZ4_BYTES = 7_744_109
+FROZEN_RUNTIME_LZ4_BYTES = 7_746_013
 
-FROZEN_RUNTIME_MENU_SHA256 = "220823f934d3933c052a3397ea7d87d8c5407275b19f75745150385fce80100c"
+FROZEN_RUNTIME_MENU_SHA256 = (
+    "2e855661f724fb9fff0810edf7cd0aea5"
+    "9339e55a4c341f7c6ef378eac3e9cbf"
+)
 
-FROZEN_RUNTIME_MENU_BYTES = 10_220_273
+FROZEN_RUNTIME_MENU_BYTES = 10_224_489
 
 def _sha256(
     path: Path,
@@ -471,6 +486,22 @@ def _stage_runtime() -> Path:
             symlinks=True,
         )
 
+    release_file = (
+        stage
+        / "etc"
+        / "treeforge-bootstrap-release"
+    )
+
+    release_file.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    release_file.write_text(
+        runtime_identity() + "\n",
+        encoding="utf-8",
+    )
+
     _compile_adb_service(
         clang,
         stage,
@@ -680,6 +711,8 @@ def build_runtime() -> Path:
         "schema": 1,
         "project":
             "TreeForge Bootstrap",
+        "version":
+            project_version(),
         "role":
             "persistent-installed-bootstrap",
         "device":
@@ -846,7 +879,7 @@ def verify_frozen_runtime() -> Path:
         )
 
     print("VISIBLE_MENU_IDENTITY=TreeForge Boot Manager")
-    print("TREEFORGE_BOOTSTRAP_RUNTIME_ABI=V1")
+    print(f"TREEFORGE_BOOTSTRAP_RUNTIME_ABI={runtime_abi_version()}")
     print("SIGNED_IMAGE=NO")
     print("SIGNING_OWNER=DOWNSTREAM_CONSUMER")
     print("TREEFORGE_BOOTSTRAP_FROZEN_RUNTIME_VERIFY=PASS")
@@ -930,7 +963,7 @@ def verify_runtime() -> Path:
         )
 
     print("VISIBLE_MENU_IDENTITY=TreeForge Boot Manager")
-    print("TREEFORGE_BOOTSTRAP_RUNTIME_ABI=V1")
+    print(f"TREEFORGE_BOOTSTRAP_RUNTIME_ABI={runtime_abi_version()}")
     print("SIGNED_IMAGE=NO")
     print("SIGNING_OWNER=DOWNSTREAM_CONSUMER")
     print("TREEFORGE_BOOTSTRAP_RUNTIME_VERIFY=PASS")

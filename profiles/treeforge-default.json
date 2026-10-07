@@ -4,7 +4,7 @@
   "root": {
     "id": "home",
     "title": "Home",
-    "subtitle": "Resume, device management, reboot and maintenance",
+    "subtitle": "Home",
     "default_entry": "resume",
     "timeout_ms": 10000,
     "timeout_action": "boot_android_slot_a",
@@ -19,12 +19,12 @@
       {
         "id": "boot-options",
         "label": "Boot Options",
-        "description": "Choose Android and future boot targets",
+        "description": "Choose operating systems and boot targets",
         "icon": "none",
         "submenu": {
           "id": "boot-options-page",
           "title": "Boot Options",
-          "subtitle": "Explicit operating-system and runtime targets",
+          "subtitle": "Operating-system and boot targets",
           "default_entry": "boot-android-a",
           "timeout_ms": 0,
           "entries": [
@@ -41,13 +41,6 @@
               "description": "Not implemented: Slot B handoff is pending",
               "icon": "none",
               "action": "not_implemented"
-            },
-            {
-              "id": "boot-diagnostics",
-              "label": "TreeForge Diagnostics",
-              "description": "Bootstrap-owned PID 1, display and ADB diagnostic runtime",
-              "icon": "none",
-              "action": "boot_diagnostics"
             },
             {
               "id": "boot-alternate",
@@ -119,35 +112,28 @@
       {
         "id": "reboot-menu",
         "label": "Reboot",
-        "description": "Bootloader working; reboot and recovery pending",
+        "description": "Choose a restart target",
         "icon": "none",
         "submenu": {
           "id": "reboot-page",
           "title": "Reboot",
-          "subtitle": "Device restart targets",
+          "subtitle": "Restart options",
           "default_entry": "reboot-system",
           "timeout_ms": 0,
           "entries": [
             {
               "id": "reboot-system",
               "label": "Reboot",
-              "description": "Not implemented: normal reboot path pending",
+              "description": "Restart the device normally",
               "icon": "none",
-              "action": "not_implemented"
+              "action": "reboot_system"
             },
             {
               "id": "reboot-bootloader",
-              "label": "Bootloader",
-              "description": "Working: reboot to bootloader",
+              "label": "Reboot Bootloader",
+              "description": "Restart into the bootloader",
               "icon": "none",
               "action": "reboot_bootloader"
-            },
-            {
-              "id": "reboot-recovery",
-              "label": "Recovery",
-              "description": "Not implemented: recovery reboot path pending",
-              "icon": "none",
-              "action": "not_implemented"
             },
             {
               "id": "reboot-back",
@@ -162,28 +148,37 @@
       {
         "id": "maintenance",
         "label": "Maintenance",
-        "description": "Logger, ADB reset and partition viewer working",
+        "description": "Versions, partitions, file transfer and ADB maintenance",
         "icon": "none",
         "submenu": {
           "id": "maintenance-page",
           "title": "Maintenance",
-          "subtitle": "Diagnostics, ADB and storage tools",
-          "default_entry": "live-logger",
+          "subtitle": "Versions, partitions, file transfer and ADB maintenance",
+          "default_entry": "component-versions",
           "timeout_ms": 0,
           "entries": [
             {
-              "id": "live-logger",
-              "label": "Live Logger",
-              "description": "Working: live kernel and runtime logger",
+              "id": "component-versions",
+              "label": "Component Versions",
+              "description": "Live TreeForge, kernel and Alternate OS versions",
               "icon": "none",
-              "action": "live_console"
-            },
-            {
-              "id": "reset-adb",
-              "label": "Reset ADB",
-              "description": "Working: restart TreeForge ADB and USB",
-              "icon": "none",
-              "action": "restart_adb_usb"
+              "submenu": {
+                "id": "component-versions-viewer",
+                "title": "Component Versions",
+                "subtitle": "Live TreeForge, kernel and Alternate OS versions",
+                "default_entry": "component-versions-back",
+                "timeout_ms": 0,
+                "timeout_action": null,
+                "entries": [
+                  {
+                    "id": "component-versions-back",
+                    "label": "Back",
+                    "description": "Return to Maintenance",
+                    "icon": "none",
+                    "action": "back"
+                  }
+                ]
+              }
             },
             {
               "id": "partition-information",
@@ -216,50 +211,14 @@
               "action": "not_implemented"
             },
             {
+              "id": "reset-adb",
+              "label": "Reset ADB",
+              "description": "Restart TreeForge ADB and USB",
+              "icon": "none",
+              "action": "restart_adb_usb"
+            },
+            {
               "id": "maintenance-back",
-              "label": "Back",
-              "description": "Return to Home",
-              "icon": "none",
-              "action": "back"
-            }
-          ]
-        }
-      },
-      {
-        "id": "future-features",
-        "label": "Future Features",
-        "description": "Not implemented: planned boot manager features",
-        "icon": "none",
-        "submenu": {
-          "id": "future-features-page",
-          "title": "Future Features",
-          "subtitle": "Reserved TreeForge capabilities",
-          "default_entry": "future-alternate",
-          "timeout_ms": 0,
-          "entries": [
-            {
-              "id": "future-alternate",
-              "label": "Alternate OS",
-              "description": "Not implemented: installer, inventory and handoff pending",
-              "icon": "none",
-              "action": "not_implemented"
-            },
-            {
-              "id": "future-recovery",
-              "label": "Recovery",
-              "description": "Not implemented: TreeForge recovery runtime pending",
-              "icon": "none",
-              "action": "not_implemented"
-            },
-            {
-              "id": "future-root",
-              "label": "Root",
-              "description": "Not implemented: root install and rooted boot pending",
-              "icon": "none",
-              "action": "not_implemented"
-            },
-            {
-              "id": "future-back",
               "label": "Back",
               "description": "Return to Home",
               "icon": "none",

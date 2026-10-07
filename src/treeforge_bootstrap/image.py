@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -64,112 +65,8 @@ RUNTIME_RAMDISK = (
 )
 
 
-AOSP_PRODUCT_OUT = (
-    REPOSITORY_ROOT.parent
-    / "treeforge"
-    / "aosp"
-    / "out"
-    / "target"
-    / "product"
-    / "tangorpro"
-)
-
-SOURCE_INIT_BOOT = (
-    AOSP_PRODUCT_OUT
-    / "init_boot.img"
-)
-
-SOURCE_VBMETA = (
-    AOSP_PRODUCT_OUT
-    / "vbmeta.img"
-)
-
-AOSP_AVB_ROOT = (
-    REPOSITORY_ROOT.parent
-    / "treeforge"
-    / "aosp"
-    / "external"
-    / "avb"
-    / "test"
-    / "data"
-)
-
-SIGNING_KEY = (
-    AOSP_AVB_ROOT
-    / "testkey_rsa2048.pem"
-)
-
-
-EXPECTED_SOURCE_SHA256 = (
-    "0c00f8912debab670395355722b7dc9e8"
-    "519b0d260b81521093ea0a3cd5a4203"
-)
-
-EXPECTED_SOURCE_VBMETA_SHA256 = (
-    "4855a1b8f76a417b057c7ab0e326c321"
-    "3d6653f21172b8c2861c5dc49a101064"
-)
-
-EXPECTED_KEY_SHA256 = (
-    "f1d5765a2bdfb92fb08aee021107c7ac"
-    "1a7a3f590dafd853771c85375ef0fbd7"
-)
-
-EXPECTED_PUBLIC_KEY_SHA1 = (
-    "cdbb77177f731920bbe0a0f94f84d903"
-    "8ae0617d"
-)
-
-
-INIT_BOOT_PARTITION_NAME = (
-    "init_boot"
-)
-
-INIT_BOOT_PARTITION_SIZE = (
-    8388608
-)
-
+INIT_BOOT_PARTITION_NAME = "init_boot"
 BOOT_PARTITION_NAME = "boot"
-
-BOOT_PARTITION_SIZE = (
-    67108864
-)
-
-ALGORITHM = (
-    "SHA256_RSA2048"
-)
-
-ROLLBACK_INDEX = (
-    1746403200
-)
-
-INIT_BOOT_SALT = (
-    "19da436f1331dc5782f956e67a0b7daa"
-    "6548f7a01537056159fe114225adb679"
-    "b86f168d310f1f03cadfc3db8ed8c57"
-    "787e741abbb24fdcb4dd663c1117ccbb8"
-)
-
-BOOT_SALT = (
-    "cbc9c29eb6c742b8b7b135aa200dc237"
-    "64e17aad7b1be3d0301ce55a0ce845de"
-)
-
-PROP_OS_VERSION = (
-    "com.android.build.init_boot.os_version:15"
-)
-
-PROP_FINGERPRINT = (
-    "com.android.build.init_boot.fingerprint:"
-    "Android/aosp_tangorpro/tangorpro:15/"
-    "BP1A.250505.005.D1/"
-    "eng.skelit:userdebug/test-keys"
-)
-
-PROP_SECURITY_PATCH = (
-    "com.android.build.init_boot.security_patch:"
-    "2025-05-05"
-)
 
 
 def _sha256(
@@ -232,82 +129,40 @@ def _resolve_signing_key(
     signing_key: Path | None,
 ) -> Path:
     """
-    Resolve the source-compatible boot-chain signing key.
+    Resolve an already-unlocked downstream AVB child key.
 
-    Provider consumers may supply the preserve-source key explicitly.
-    A distinct replacement-trust key is not used for initial image
-    construction; avb_graph applies replacement trust afterwards.
+    TreeForge Bootstrap never creates, persists, encrypts, decrypts,
+    or otherwise owns private signing material. Pixel Partitioner /
+    Manager owns that lifecycle and supplies the temporary unlocked key.
     """
 
-    if signing_key is not None:
-        explicit = (
-            signing_key
-            .expanduser()
-            .resolve()
-        )
-
-        if not explicit.is_file():
-            raise TreeForgeBootstrapImageError(
-                "explicit AVB signing key missing: "
-                f"{explicit}"
-            )
-
-        if (
-            _sha256(explicit)
-            == EXPECTED_KEY_SHA256
-        ):
-            return explicit
-
-        #
-        # Preserve the established replacement-trust developer path:
-        # build the source-compatible base images first, then let
-        # avb_graph apply the requested replacement identity.
-        #
-        if not SIGNING_KEY.is_file():
-            raise TreeForgeBootstrapImageError(
-                "replacement AVB key supplied, but "
-                "source-compatible base signing key "
-                "is unavailable"
-            )
-
-    if not SIGNING_KEY.is_file():
+    if signing_key is None:
         raise TreeForgeBootstrapImageError(
-            "AOSP RSA-2048 AVB key missing: "
-            f"{SIGNING_KEY}"
+            "an explicit downstream RSA-2048 AVB child key "
+            "is required"
         )
 
-    key_sha = _sha256(
-        SIGNING_KEY
+    resolved = (
+        signing_key
+        .expanduser()
+        .resolve()
     )
 
-    if key_sha != EXPECTED_KEY_SHA256:
+    if not resolved.is_file():
         raise TreeForgeBootstrapImageError(
-            "AOSP RSA-2048 AVB key "
-            "identity changed: "
-            f"{key_sha}"
+            "explicit AVB child signing key missing: "
+            f"{resolved}"
         )
 
-    return SIGNING_KEY
+    return resolved
 
 
 def _validate_inputs(
     *,
-    source_init_boot: Path | None = None,
-    source_vbmeta: Path | None = None,
-    signing_key: Path | None = None,
-) -> Path:
-    resolved_source_init_boot = (
-        SOURCE_INIT_BOOT
-        if source_init_boot is None
-        else source_init_boot
-    )
-
-    resolved_source_vbmeta = (
-        SOURCE_VBMETA
-        if source_vbmeta is None
-        else source_vbmeta
-    )
-
+    source_init_boot: Path | None,
+    source_vbmeta: Path | None,
+    signing_key: Path | None,
+) -> tuple[Path, Path, Path]:
     verify_frozen_runtime()
 
     if not RUNTIME_RAMDISK.is_file():
@@ -316,173 +171,637 @@ def _validate_inputs(
             f"{RUNTIME_RAMDISK}"
         )
 
-    if not resolved_source_init_boot.is_file():
+    if source_init_boot is None:
         raise TreeForgeBootstrapImageError(
-            "locked AOSP tangorpro init_boot "
-            "missing: "
-            f"{resolved_source_init_boot}"
+            "source init_boot is required; Bootstrap no longer "
+            "falls back to a local AOSP checkout"
         )
 
-    source_sha = _sha256(
-        resolved_source_init_boot
+    if source_vbmeta is None:
+        raise TreeForgeBootstrapImageError(
+            "source vbmeta is required; Bootstrap no longer "
+            "falls back to a local AOSP checkout"
+        )
+
+    resolved_source_init_boot = (
+        source_init_boot
+        .expanduser()
+        .resolve()
     )
 
-    if (
-        source_init_boot is None
-        and source_sha
-        != EXPECTED_SOURCE_SHA256
-    ):
+    resolved_source_vbmeta = (
+        source_vbmeta
+        .expanduser()
+        .resolve()
+    )
+
+    if not resolved_source_init_boot.is_file():
         raise TreeForgeBootstrapImageError(
-            "locked AOSP tangorpro "
-            "init_boot identity changed: "
-            f"{source_sha}"
+            "source init_boot missing: "
+            f"{resolved_source_init_boot}"
         )
 
     if not resolved_source_vbmeta.is_file():
         raise TreeForgeBootstrapImageError(
-            "locked AOSP tangorpro vbmeta "
-            f"missing: {resolved_source_vbmeta}"
+            "source vbmeta missing: "
+            f"{resolved_source_vbmeta}"
         )
 
-    vbmeta_sha = _sha256(
-        resolved_source_vbmeta
+    return (
+        resolved_source_init_boot,
+        resolved_source_vbmeta,
+        _resolve_signing_key(
+            signing_key
+        ),
     )
+
+
+def _avb_info(
+    avbtool: Path,
+    image: Path,
+) -> str:
+    return _run(
+        [
+            str(avbtool),
+            "info_image",
+            "--image",
+            str(image),
+        ]
+    )
+
+
+def _top_field(
+    info: str,
+    name: str,
+) -> str:
+    prefix = name + ":"
+
+    for line in info.splitlines():
+        if line.startswith(prefix):
+            return line[
+                len(prefix):
+            ].strip()
+
+    raise TreeForgeBootstrapImageError(
+        f"AVB image is missing top-level field: {name}"
+    )
+
+
+def _properties(
+    info: str,
+) -> tuple[tuple[str, str], ...]:
+    result = []
+
+    expression = re.compile(
+        r"^\s+Prop: (.*?) -> '(.*)'$"
+    )
+
+    for line in info.splitlines():
+        match = expression.match(
+            line
+        )
+
+        if match is not None:
+            result.append(
+                (
+                    match.group(1),
+                    match.group(2),
+                )
+            )
+
+    return tuple(result)
+
+
+def _hash_descriptor(
+    info: str,
+) -> dict[str, str]:
+    lines = info.splitlines()
+
+    index = None
+
+    for current, line in enumerate(lines):
+        if line.strip() == "Hash descriptor:":
+            index = current
+            break
+
+    if index is None:
+        raise TreeForgeBootstrapImageError(
+            "AVB image has no hash descriptor"
+        )
+
+    wanted = {
+        "Image Size",
+        "Hash Algorithm",
+        "Partition Name",
+        "Salt",
+        "Flags",
+    }
+
+    result = {}
+
+    for line in lines[
+        index + 1:
+    ]:
+        stripped = line.strip()
+
+        if stripped.startswith("Prop:"):
+            break
+
+        if (
+            stripped.endswith("descriptor:")
+            and stripped != "Hash descriptor:"
+        ):
+            break
+
+        if ":" not in stripped:
+            continue
+
+        name, value = stripped.split(
+            ":",
+            1,
+        )
+
+        if name in wanted:
+            result[name] = value.strip()
+
+    missing = sorted(
+        wanted - set(result)
+    )
+
+    if missing:
+        raise TreeForgeBootstrapImageError(
+            "AVB hash descriptor is incomplete: "
+            + ",".join(missing)
+        )
+
+    return result
+
+
+def _hash_contract(
+    avbtool: Path,
+    image: Path,
+    *,
+    expected_partition: str,
+) -> dict[str, object]:
+    info = _avb_info(
+        avbtool,
+        image,
+    )
+
+    descriptor = _hash_descriptor(
+        info
+    )
+
+    contract = {
+        "algorithm":
+            _top_field(
+                info,
+                "Algorithm",
+            ),
+
+        "rollback_index":
+            _top_field(
+                info,
+                "Rollback Index",
+            ),
+
+        "rollback_index_location":
+            _top_field(
+                info,
+                "Rollback Index Location",
+            ),
+
+        "header_flags":
+            _top_field(
+                info,
+                "Flags",
+            ),
+
+        "public_key_sha1":
+            _top_field(
+                info,
+                "Public key (sha1)",
+            ),
+
+        "hash_algorithm":
+            descriptor[
+                "Hash Algorithm"
+            ],
+
+        "partition_name":
+            descriptor[
+                "Partition Name"
+            ],
+
+        "salt":
+            descriptor[
+                "Salt"
+            ],
+
+        "hash_flags":
+            descriptor[
+                "Flags"
+            ],
+
+        "properties":
+            _properties(
+                info
+            ),
+    }
 
     if (
-        source_vbmeta is None
-        and vbmeta_sha
-        != EXPECTED_SOURCE_VBMETA_SHA256
+        contract["partition_name"]
+        != expected_partition
     ):
         raise TreeForgeBootstrapImageError(
-            "locked AOSP tangorpro vbmeta "
-            "identity changed: "
-            f"{vbmeta_sha}"
+            "AVB partition identity changed: "
+            f"{contract['partition_name']} != "
+            f"{expected_partition}"
         )
 
-    return _resolve_signing_key(
-        signing_key
-    )
+    if (
+        contract["algorithm"]
+        != "SHA256_RSA2048"
+    ):
+        raise TreeForgeBootstrapImageError(
+            f"{expected_partition} requires "
+            "the RSA-2048 child AVB identity; "
+            f"found {contract['algorithm']}"
+        )
+
+    if contract["header_flags"] != "0":
+        raise TreeForgeBootstrapImageError(
+            f"{expected_partition} has unsupported "
+            "AVB header flags"
+        )
+
+    if contract["hash_flags"] != "0":
+        raise TreeForgeBootstrapImageError(
+            f"{expected_partition} has unsupported "
+            "AVB hash-descriptor flags"
+        )
+
+    return contract
 
 
-def _verify_public_key(
+def _extract_signing_public_key(
     avbtool: Path,
-    *,
-    resolved_signing_key: Path,
-) -> None:
+    signing_key: Path,
+) -> tuple[bytes, str]:
     IMAGE_WORK.mkdir(
         parents=True,
         exist_ok=True,
     )
 
-    public_key = (
+    output = (
         IMAGE_WORK
-        / "treeforge-bootstrap.avbpubkey"
+        / "downstream-child.avbpubkey"
     )
 
-    if public_key.exists():
-        public_key.unlink()
+    if output.exists():
+        output.unlink()
 
     _run(
         [
             str(avbtool),
             "extract_public_key",
             "--key",
-            str(resolved_signing_key),
+            str(signing_key),
             "--output",
-            str(public_key),
+            str(output),
         ]
     )
 
-    actual = _sha1(
-        public_key
+    public = output.read_bytes()
+
+    if len(public) < 4:
+        raise TreeForgeBootstrapImageError(
+            "supplied child AVB public key is truncated"
+        )
+
+    bits = int.from_bytes(
+        public[:4],
+        byteorder="big",
+        signed=False,
     )
 
-    if (
-        actual
-        != EXPECTED_PUBLIC_KEY_SHA1
-    ):
+    if bits != 2048:
         raise TreeForgeBootstrapImageError(
-            "AVB signing public-key "
-            "identity changed: "
-            f"{actual}"
+            "Bootstrap boot/init_boot signing requires "
+            f"the RSA-2048 owner child key; found RSA-{bits}"
         )
+
+    identity = hashlib.sha1(
+        public
+    ).hexdigest()
+
+    output.unlink()
+
+    return (
+        public,
+        identity,
+    )
+
+
+def _chain_key(
+    info: str,
+    partition: str,
+) -> str:
+    marker = (
+        "Partition Name:          "
+        + partition
+    )
+
+    index = info.find(
+        marker
+    )
+
+    if index < 0:
+        raise TreeForgeBootstrapImageError(
+            "root vbmeta is missing "
+            f"{partition} chain"
+        )
+
+    block = info[
+        index:index + 800
+    ]
+
+    prefix = (
+        "Public key (sha1):       "
+    )
+
+    for line in block.splitlines():
+        stripped = line.strip()
+
+        if stripped.startswith(
+            "Public key (sha1):"
+        ):
+            value = stripped.split(
+                ":",
+                1,
+            )[1].strip()
+
+            if not re.fullmatch(
+                r"[0-9a-f]{40}",
+                value,
+            ):
+                raise TreeForgeBootstrapImageError(
+                    "invalid root-vbmeta chain key "
+                    f"for {partition}: {value}"
+                )
+
+            return value
+
+    raise TreeForgeBootstrapImageError(
+        "root vbmeta chain is missing "
+        f"the {partition} public key"
+    )
 
 
 def _verify_parent_chain(
     avbtool: Path,
     *,
-    source_vbmeta: Path | None = None,
-) -> None:
-    resolved_source_vbmeta = (
-        SOURCE_VBMETA
-        if source_vbmeta is None
-        else source_vbmeta
-    )
-    info = _run(
-        [
-            str(avbtool),
-            "info_image",
-            "--image",
-            str(resolved_source_vbmeta),
-        ]
+    source_vbmeta: Path,
+    signing_public_key_sha1: str,
+    require_match: bool,
+) -> tuple[str, bool]:
+    info = _avb_info(
+        avbtool,
+        source_vbmeta,
     )
 
-    for partition in (
+    boot_key = _chain_key(
+        info,
         "boot",
+    )
+
+    init_boot_key = _chain_key(
+        info,
         "init_boot",
+    )
+
+    if boot_key != init_boot_key:
+        raise TreeForgeBootstrapImageError(
+            "source root vbmeta delegates boot and init_boot "
+            "to different child AVB identities"
+        )
+
+    rewrite_required = (
+        boot_key
+        != signing_public_key_sha1
+    )
+
+    if rewrite_required and require_match:
+        raise TreeForgeBootstrapImageError(
+            "supplied owner child key does not match the "
+            "existing boot/init_boot root-vbmeta chain: "
+            f"source={boot_key} "
+            f"supplied={signing_public_key_sha1}"
+        )
+
+    return (
+        boot_key,
+        rewrite_required,
+    )
+
+
+def _assert_contract_preserved(
+    before: dict[str, object],
+    after: dict[str, object],
+    *,
+    expected_public_key_sha1: str,
+) -> None:
+    for field in (
+        "algorithm",
+        "rollback_index",
+        "rollback_index_location",
+        "header_flags",
+        "hash_algorithm",
+        "partition_name",
+        "salt",
+        "hash_flags",
+        "properties",
     ):
-        marker = (
-            "Partition Name:          "
-            + partition
-        )
-
-        index = info.find(
-            marker
-        )
-
-        if index < 0:
+        if before[field] != after[field]:
             raise TreeForgeBootstrapImageError(
-                "root vbmeta is missing "
-                f"{partition} chain"
+                "AVB contract changed while signing: "
+                f"{field}: "
+                f"{before[field]} != {after[field]}"
             )
 
-        block = info[
-            index:index + 500
-        ]
-
-        key_marker = (
-            "Public key (sha1):       "
-            + EXPECTED_PUBLIC_KEY_SHA1
+    if (
+        after["public_key_sha1"]
+        != expected_public_key_sha1
+    ):
+        raise TreeForgeBootstrapImageError(
+            "realized AVB public-key identity does not "
+            "match the supplied downstream child key"
         )
 
-        if key_marker not in block:
-            raise TreeForgeBootstrapImageError(
-                "root vbmeta "
-                f"{partition} chain key changed"
-            )
+
+def _resign_boot_image(
+    image: Path,
+    *,
+    signing_key: Path,
+    signing_public: bytes,
+) -> None:
+    #
+    # Reuse the same payload-preserving owner-signing primitive used
+    # by Pixel Partitioner. Import lazily to avoid module import cycles:
+    # owner_family -> avb_graph -> image.
+    #
+    from .owner_family import (
+        OwnerFamilyError,
+        read_metadata,
+        resign,
+        sha256 as owner_sha256,
+    )
+
+    try:
+        (
+            _header,
+            _descriptors,
+            before_offset,
+            _footer,
+        ) = read_metadata(
+            image
+        )
+
+        before_payload = owner_sha256(
+            image,
+            before_offset,
+        )
+
+        resign(
+            image,
+            signing_key,
+            signing_public,
+            signing_public,
+        )
+
+        (
+            _header,
+            _descriptors,
+            after_offset,
+            _footer,
+        ) = read_metadata(
+            image
+        )
+
+        after_payload = owner_sha256(
+            image,
+            after_offset,
+        )
+
+    except OwnerFamilyError as exc:
+        raise TreeForgeBootstrapImageError(
+            "unable to apply the downstream owner child "
+            "identity to Bootstrap boot"
+        ) from exc
+
+    if (
+        before_offset != after_offset
+        or before_payload != after_payload
+    ):
+        raise TreeForgeBootstrapImageError(
+            "Bootstrap boot payload changed while "
+            "applying the owner AVB identity"
+        )
+
+
+def _add_hash_footer(
+    avbtool: Path,
+    *,
+    image: Path,
+    partition_size: int,
+    contract: dict[str, object],
+    signing_key: Path,
+) -> None:
+    command = [
+        str(avbtool),
+        "add_hash_footer",
+
+        "--image",
+        str(image),
+
+        "--partition_name",
+        str(
+            contract[
+                "partition_name"
+            ]
+        ),
+
+        "--partition_size",
+        str(partition_size),
+
+        "--algorithm",
+        str(
+            contract[
+                "algorithm"
+            ]
+        ),
+
+        "--key",
+        str(signing_key),
+
+        "--rollback_index",
+        str(
+            contract[
+                "rollback_index"
+            ]
+        ),
+
+        "--rollback_index_location",
+        str(
+            contract[
+                "rollback_index_location"
+            ]
+        ),
+
+        "--hash_algorithm",
+        str(
+            contract[
+                "hash_algorithm"
+            ]
+        ),
+
+        "--salt",
+        str(
+            contract[
+                "salt"
+            ]
+        ),
+    ]
+
+    for key, value in contract[
+        "properties"
+    ]:
+        command.extend(
+            [
+                "--prop",
+                f"{key}:{value}",
+            ]
+        )
+
+    _run(
+        command
+    )
 
 
 def _expected_metadata(
-    init_boot_sha: str,
     *,
-    source_init_boot: Path | None = None,
-    source_vbmeta: Path | None = None,
+    boot_sha: str,
+    init_boot_sha: str,
+    source_init_boot: Path,
+    source_vbmeta: Path,
+    source_child_public_key_sha1: str,
+    signing_public_key_sha1: str,
+    source_init_contract: dict[str, object],
+    vbmeta_rewrite_required: bool,
 ) -> dict[str, object]:
-    resolved_source_init_boot = (
-        SOURCE_INIT_BOOT
-        if source_init_boot is None
-        else source_init_boot
-    )
-
-    resolved_source_vbmeta = (
-        SOURCE_VBMETA
-        if source_vbmeta is None
-        else source_vbmeta
-    )
-
     return {
         "schema":
-            1,
+            2,
 
         "device":
             "tangorpro",
@@ -491,38 +810,37 @@ def _expected_metadata(
             "android-15",
 
         "source_family":
-            "aosp-tangorpro-"
-            "BP1A.250505.005.D1",
+            "caller-supplied-device-family",
 
         "source_init_boot_sha256":
             _sha256(
-                resolved_source_init_boot
+                source_init_boot
             ),
 
         "source_vbmeta_sha256":
             _sha256(
-                resolved_source_vbmeta
+                source_vbmeta
             ),
+
+        "source_boot_chain_public_key_sha1":
+            source_child_public_key_sha1,
 
         "runtime_ramdisk_sha256":
             _sha256(
                 RUNTIME_RAMDISK
             ),
 
-        "signing_key_sha256":
-            EXPECTED_KEY_SHA256,
-
         "signing_public_key_sha1":
-            EXPECTED_PUBLIC_KEY_SHA1,
+            signing_public_key_sha1,
 
         "signed_image":
             True,
 
         "signing_owner":
-            "treeforge-bootstrap",
+            "downstream_consumer",
 
         "vbmeta_rewrite_required":
-            False,
+            vbmeta_rewrite_required,
 
         "kernel": {
             "repository":
@@ -534,35 +852,56 @@ def _expected_metadata(
             "asset":
                 KERNEL_ASSET,
 
-            "image_bytes":
+            "provider_image_sha256":
+                EXPECTED_KERNEL_SHA256,
+
+            "realized_image_bytes":
                 OUTPUT_BOOT_IMAGE.stat().st_size,
 
-            "image_sha256":
-                _sha256(
-                    OUTPUT_BOOT_IMAGE
-                ),
+            "realized_image_sha256":
+                boot_sha,
         },
 
         "init_boot": {
             "partition_name":
-                INIT_BOOT_PARTITION_NAME,
+                source_init_contract[
+                    "partition_name"
+                ],
 
             "partition_size":
-                INIT_BOOT_PARTITION_SIZE,
+                source_init_boot.stat().st_size,
 
             "algorithm":
-                ALGORITHM,
+                source_init_contract[
+                    "algorithm"
+                ],
 
             "rollback_index":
-                ROLLBACK_INDEX,
+                source_init_contract[
+                    "rollback_index"
+                ],
+
+            "rollback_index_location":
+                source_init_contract[
+                    "rollback_index_location"
+                ],
+
+            "hash_algorithm":
+                source_init_contract[
+                    "hash_algorithm"
+                ],
 
             "salt":
-                INIT_BOOT_SALT,
+                source_init_contract[
+                    "salt"
+                ],
 
             "properties": [
-                PROP_OS_VERSION,
-                PROP_FINGERPRINT,
-                PROP_SECURITY_PATCH,
+                f"{key}:{value}"
+                for key, value
+                in source_init_contract[
+                    "properties"
+                ]
             ],
 
             "image_bytes":
@@ -579,8 +918,13 @@ def build_image(
     source_init_boot: Path | None = None,
     source_vbmeta: Path | None = None,
     signing_key: Path | None = None,
+    require_parent_match: bool = True,
 ) -> Path:
-    resolved_signing_key = _validate_inputs(
+    (
+        resolved_source_init_boot,
+        resolved_source_vbmeta,
+        resolved_signing_key,
+    ) = _validate_inputs(
         source_init_boot=source_init_boot,
         source_vbmeta=source_vbmeta,
         signing_key=signing_key,
@@ -593,8 +937,7 @@ def build_image(
         != EXPECTED_KERNEL_BYTES
     ):
         raise TreeForgeBootstrapImageError(
-            "released Bootstrap kernel "
-            "size changed"
+            "released Bootstrap kernel size changed"
         )
 
     if (
@@ -602,8 +945,7 @@ def build_image(
         != EXPECTED_KERNEL_SHA256
     ):
         raise TreeForgeBootstrapImageError(
-            "released Bootstrap kernel "
-            "identity changed"
+            "released Bootstrap kernel identity changed"
         )
 
     mkbootimg = ensure_host_tool(
@@ -614,16 +956,59 @@ def build_image(
         "avbtool"
     )
 
-    _verify_public_key(
+    (
+        signing_public,
+        signing_public_key_sha1,
+    ) = _extract_signing_public_key(
         avbtool,
-        resolved_signing_key=(
-            resolved_signing_key
+        resolved_signing_key,
+    )
+
+    (
+        source_child_public_key_sha1,
+        vbmeta_rewrite_required,
+    ) = _verify_parent_chain(
+        avbtool,
+        source_vbmeta=(
+            resolved_source_vbmeta
+        ),
+        signing_public_key_sha1=(
+            signing_public_key_sha1
+        ),
+        require_match=(
+            require_parent_match
         ),
     )
 
-    _verify_parent_chain(
-        avbtool,
-        source_vbmeta=source_vbmeta,
+    source_init_contract = (
+        _hash_contract(
+            avbtool,
+            resolved_source_init_boot,
+            expected_partition=(
+                INIT_BOOT_PARTITION_NAME
+            ),
+        )
+    )
+
+    if (
+        source_init_contract[
+            "public_key_sha1"
+        ]
+        != source_child_public_key_sha1
+    ):
+        raise TreeForgeBootstrapImageError(
+            "source init_boot AVB identity does not match "
+            "the root-vbmeta init_boot chain"
+        )
+
+    kernel_contract = (
+        _hash_contract(
+            avbtool,
+            kernel,
+            expected_partition=(
+                BOOT_PARTITION_NAME
+            ),
+        )
     )
 
     IMAGE_WORK.mkdir(
@@ -650,11 +1035,48 @@ def build_image(
         if path.exists():
             path.unlink()
 
+    #
+    # The published kernel boot image is the immutable payload
+    # provider. Replace only its AVB signing identity.
+    #
     shutil.copyfile(
         kernel,
         OUTPUT_BOOT_IMAGE,
     )
 
+    _resign_boot_image(
+        OUTPUT_BOOT_IMAGE,
+        signing_key=(
+            resolved_signing_key
+        ),
+        signing_public=(
+            signing_public
+        ),
+    )
+
+    realized_boot_contract = (
+        _hash_contract(
+            avbtool,
+            OUTPUT_BOOT_IMAGE,
+            expected_partition=(
+                BOOT_PARTITION_NAME
+            ),
+        )
+    )
+
+    _assert_contract_preserved(
+        kernel_contract,
+        realized_boot_contract,
+        expected_public_key_sha1=(
+            signing_public_key_sha1
+        ),
+    )
+
+    #
+    # Construct the TreeForge runtime payload, then inherit the
+    # source init_boot AVB contract and sign it with the same child
+    # owner identity.
+    #
     _run(
         [
             str(mkbootimg),
@@ -669,8 +1091,7 @@ def build_image(
 
     if unsigned.stat().st_size <= 0:
         raise TreeForgeBootstrapImageError(
-            "mkbootimg produced an empty "
-            "init_boot image"
+            "mkbootimg produced an empty init_boot image"
         )
 
     shutil.copyfile(
@@ -678,61 +1099,79 @@ def build_image(
         OUTPUT_IMAGE,
     )
 
-    _run(
-        [
-            str(avbtool),
-            "add_hash_footer",
-
-            "--image",
-            str(OUTPUT_IMAGE),
-
-            "--partition_name",
-            INIT_BOOT_PARTITION_NAME,
-
-            "--partition_size",
-            str(INIT_BOOT_PARTITION_SIZE),
-
-            "--algorithm",
-            ALGORITHM,
-
-            "--key",
-            str(resolved_signing_key),
-
-            "--rollback_index",
-            str(ROLLBACK_INDEX),
-
-            "--salt",
-            INIT_BOOT_SALT,
-
-            "--prop",
-            PROP_OS_VERSION,
-
-            "--prop",
-            PROP_FINGERPRINT,
-
-            "--prop",
-            PROP_SECURITY_PATCH,
-        ]
+    _add_hash_footer(
+        avbtool,
+        image=OUTPUT_IMAGE,
+        partition_size=(
+            resolved_source_init_boot
+            .stat()
+            .st_size
+        ),
+        contract=(
+            source_init_contract
+        ),
+        signing_key=(
+            resolved_signing_key
+        ),
     )
 
     if (
         OUTPUT_IMAGE.stat().st_size
-        != INIT_BOOT_PARTITION_SIZE
+        != resolved_source_init_boot.stat().st_size
     ):
         raise TreeForgeBootstrapImageError(
-            "signed init_boot partition "
-            "size changed: "
-            f"{OUTPUT_IMAGE.stat().st_size}"
+            "realized init_boot partition size changed: "
+            f"{OUTPUT_IMAGE.stat().st_size} != "
+            f"{resolved_source_init_boot.stat().st_size}"
         )
+
+    realized_init_contract = (
+        _hash_contract(
+            avbtool,
+            OUTPUT_IMAGE,
+            expected_partition=(
+                INIT_BOOT_PARTITION_NAME
+            ),
+        )
+    )
+
+    _assert_contract_preserved(
+        source_init_contract,
+        realized_init_contract,
+        expected_public_key_sha1=(
+            signing_public_key_sha1
+        ),
+    )
+
+    boot_sha = _sha256(
+        OUTPUT_BOOT_IMAGE
+    )
 
     init_boot_sha = _sha256(
         OUTPUT_IMAGE
     )
 
     metadata = _expected_metadata(
-        init_boot_sha,
-        source_init_boot=source_init_boot,
-        source_vbmeta=source_vbmeta,
+        boot_sha=boot_sha,
+        init_boot_sha=init_boot_sha,
+        source_init_boot=(
+            resolved_source_init_boot
+        ),
+        source_vbmeta=(
+            resolved_source_vbmeta
+        ),
+        source_child_public_key_sha1=(
+            source_child_public_key_sha1
+        ),
+        signing_public_key_sha1=(
+            signing_public_key_sha1
+        ),
+        source_init_contract=(
+            source_init_contract
+        ),
+        vbmeta_rewrite_required=(
+            vbmeta_rewrite_required
+        ),
     )
 
     OUTPUT_METADATA.write_text(
@@ -752,7 +1191,6 @@ def build_image(
         "================================"
     )
     print()
-
     print(
         f"Boot:       {OUTPUT_BOOT_IMAGE}"
     )
@@ -760,11 +1198,9 @@ def build_image(
         f"Boot bytes: {OUTPUT_BOOT_IMAGE.stat().st_size}"
     )
     print(
-        f"Boot SHA:   {_sha256(OUTPUT_BOOT_IMAGE)}"
+        f"Boot SHA:   {boot_sha}"
     )
-
     print()
-
     print(
         f"Init boot:       {OUTPUT_IMAGE}"
     )
@@ -774,11 +1210,13 @@ def build_image(
     print(
         f"Init boot SHA:   {init_boot_sha}"
     )
-
     print(
         f"Metadata:        {OUTPUT_METADATA}"
     )
-
+    print(
+        "Public key:      "
+        + signing_public_key_sha1
+    )
     print()
     print(
         "IMAGE_FAMILY=boot,init_boot"
@@ -787,10 +1225,15 @@ def build_image(
         "SIGNED_IMAGE=YES"
     )
     print(
-        "SIGNING_OWNER=TREEFORGE_BOOTSTRAP"
+        "SIGNING_OWNER=DOWNSTREAM_CONSUMER"
     )
     print(
-        "VBMETA_REWRITE_REQUIRED=NO"
+        "VBMETA_REWRITE_REQUIRED="
+        + (
+            "YES"
+            if vbmeta_rewrite_required
+            else "NO"
+        )
     )
     print(
         "TREEFORGE_BOOTSTRAP_IMAGE_BUILD=PASS"
@@ -804,8 +1247,13 @@ def verify_image(
     source_init_boot: Path | None = None,
     source_vbmeta: Path | None = None,
     signing_key: Path | None = None,
+    require_parent_match: bool = True,
 ) -> Path:
-    resolved_signing_key = _validate_inputs(
+    (
+        resolved_source_init_boot,
+        resolved_source_vbmeta,
+        resolved_signing_key,
+    ) = _validate_inputs(
         source_init_boot=source_init_boot,
         source_vbmeta=source_vbmeta,
         signing_key=signing_key,
@@ -813,60 +1261,46 @@ def verify_image(
 
     kernel = ensure_bootstrap_kernel()
 
+    if (
+        _sha256(kernel)
+        != EXPECTED_KERNEL_SHA256
+    ):
+        raise TreeForgeBootstrapImageError(
+            "released Bootstrap kernel provider identity changed"
+        )
+
     if not OUTPUT_BOOT_IMAGE.is_file():
         raise TreeForgeBootstrapImageError(
-            "TreeForge Bootstrap boot image "
-            f"missing: {OUTPUT_BOOT_IMAGE}"
+            "TreeForge Bootstrap boot image missing: "
+            f"{OUTPUT_BOOT_IMAGE}"
         )
 
     if not OUTPUT_IMAGE.is_file():
         raise TreeForgeBootstrapImageError(
-            "TreeForge Bootstrap init_boot "
-            f"missing: {OUTPUT_IMAGE}"
+            "TreeForge Bootstrap init_boot missing: "
+            f"{OUTPUT_IMAGE}"
         )
 
     if not OUTPUT_METADATA.is_file():
         raise TreeForgeBootstrapImageError(
-            "TreeForge Bootstrap image "
-            f"metadata missing: {OUTPUT_METADATA}"
+            "TreeForge Bootstrap image metadata missing: "
+            f"{OUTPUT_METADATA}"
         )
 
     if (
         OUTPUT_BOOT_IMAGE.stat().st_size
-        != BOOT_PARTITION_SIZE
+        != kernel.stat().st_size
     ):
         raise TreeForgeBootstrapImageError(
-            "boot image size changed: "
-            f"{OUTPUT_BOOT_IMAGE.stat().st_size}"
-        )
-
-    boot_sha = _sha256(
-        OUTPUT_BOOT_IMAGE
-    )
-
-    if boot_sha != EXPECTED_KERNEL_SHA256:
-        raise TreeForgeBootstrapImageError(
-            "output boot image identity "
-            "changed: "
-            f"{boot_sha}"
-        )
-
-    if (
-        _sha256(kernel)
-        != boot_sha
-    ):
-        raise TreeForgeBootstrapImageError(
-            "output boot image no longer "
-            "matches released Bootstrap kernel"
+            "realized boot partition size changed"
         )
 
     if (
         OUTPUT_IMAGE.stat().st_size
-        != INIT_BOOT_PARTITION_SIZE
+        != resolved_source_init_boot.stat().st_size
     ):
         raise TreeForgeBootstrapImageError(
-            "init_boot image size changed: "
-            f"{OUTPUT_IMAGE.stat().st_size}"
+            "realized init_boot partition size changed"
         )
 
     avbtool = ensure_host_tool(
@@ -877,16 +1311,95 @@ def verify_image(
         "unpack_bootimg"
     )
 
-    _verify_public_key(
+    (
+        _signing_public,
+        signing_public_key_sha1,
+    ) = _extract_signing_public_key(
         avbtool,
-        resolved_signing_key=(
-            resolved_signing_key
+        resolved_signing_key,
+    )
+
+    (
+        source_child_public_key_sha1,
+        vbmeta_rewrite_required,
+    ) = _verify_parent_chain(
+        avbtool,
+        source_vbmeta=(
+            resolved_source_vbmeta
+        ),
+        signing_public_key_sha1=(
+            signing_public_key_sha1
+        ),
+        require_match=(
+            require_parent_match
         ),
     )
 
-    _verify_parent_chain(
-        avbtool,
-        source_vbmeta=source_vbmeta,
+    source_init_contract = (
+        _hash_contract(
+            avbtool,
+            resolved_source_init_boot,
+            expected_partition=(
+                INIT_BOOT_PARTITION_NAME
+            ),
+        )
+    )
+
+    if (
+        source_init_contract[
+            "public_key_sha1"
+        ]
+        != source_child_public_key_sha1
+    ):
+        raise TreeForgeBootstrapImageError(
+            "source init_boot AVB identity does not match "
+            "the source root-vbmeta chain"
+        )
+
+    kernel_contract = (
+        _hash_contract(
+            avbtool,
+            kernel,
+            expected_partition=(
+                BOOT_PARTITION_NAME
+            ),
+        )
+    )
+
+    realized_boot_contract = (
+        _hash_contract(
+            avbtool,
+            OUTPUT_BOOT_IMAGE,
+            expected_partition=(
+                BOOT_PARTITION_NAME
+            ),
+        )
+    )
+
+    realized_init_contract = (
+        _hash_contract(
+            avbtool,
+            OUTPUT_IMAGE,
+            expected_partition=(
+                INIT_BOOT_PARTITION_NAME
+            ),
+        )
+    )
+
+    _assert_contract_preserved(
+        kernel_contract,
+        realized_boot_contract,
+        expected_public_key_sha1=(
+            signing_public_key_sha1
+        ),
+    )
+
+    _assert_contract_preserved(
+        source_init_contract,
+        realized_init_contract,
+        expected_public_key_sha1=(
+            signing_public_key_sha1
+        ),
     )
 
     _run(
@@ -911,95 +1424,60 @@ def verify_image(
         ]
     )
 
-    boot_info = _run(
-        [
-            str(avbtool),
-            "info_image",
-            "--image",
-            str(OUTPUT_BOOT_IMAGE),
-        ]
+    #
+    # Verify that changing the boot signer did not alter the
+    # published r0.94-v1.0b1 boot payload.
+    #
+    from .owner_family import (
+        OwnerFamilyError,
+        read_metadata,
+        sha256 as owner_sha256,
     )
 
-    required_boot_info = (
-        "Image size:               "
-        "67108864 bytes",
+    try:
+        (
+            _header,
+            _descriptors,
+            kernel_payload_bytes,
+            _footer,
+        ) = read_metadata(
+            kernel
+        )
 
-        "Original image size:      "
-        "16506880 bytes",
+        (
+            _header,
+            _descriptors,
+            realized_payload_bytes,
+            _footer,
+        ) = read_metadata(
+            OUTPUT_BOOT_IMAGE
+        )
 
-        "Public key (sha1):        "
-        + EXPECTED_PUBLIC_KEY_SHA1,
+        kernel_payload_sha = owner_sha256(
+            kernel,
+            kernel_payload_bytes,
+        )
 
-        "Algorithm:                "
-        + ALGORITHM,
+        realized_payload_sha = owner_sha256(
+            OUTPUT_BOOT_IMAGE,
+            realized_payload_bytes,
+        )
 
-        "Rollback Index:           "
-        + str(ROLLBACK_INDEX),
+    except OwnerFamilyError as exc:
+        raise TreeForgeBootstrapImageError(
+            "unable to verify owner-signed boot payload identity"
+        ) from exc
 
-        "Partition Name:        boot",
-
-        "Salt:                  "
-        + BOOT_SALT,
-
-        "com.android.build.boot."
-        "os_version -> '15'",
-
-        "com.android.build.boot."
-        "security_patch -> "
-        "'2025-05-05'",
-    )
-
-    for marker in required_boot_info:
-        if marker not in boot_info:
-            raise TreeForgeBootstrapImageError(
-                "Bootstrap boot AVB "
-                "contract changed: "
-                f"{marker}"
-            )
-
-    init_boot_info = _run(
-        [
-            str(avbtool),
-            "info_image",
-            "--image",
-            str(OUTPUT_IMAGE),
-        ]
-    )
-
-    required_init_boot_info = (
-        "Image size:               "
-        "8388608 bytes",
-
-        "Public key (sha1):        "
-        + EXPECTED_PUBLIC_KEY_SHA1,
-
-        "Algorithm:                "
-        + ALGORITHM,
-
-        "Rollback Index:           "
-        + str(ROLLBACK_INDEX),
-
-        "Partition Name:        "
-        + INIT_BOOT_PARTITION_NAME,
-
-        "Salt:                  "
-        + INIT_BOOT_SALT,
-
-        "com.android.build."
-        "init_boot.os_version -> '15'",
-
-        "com.android.build."
-        "init_boot.security_patch "
-        "-> '2025-05-05'",
-    )
-
-    for marker in required_init_boot_info:
-        if marker not in init_boot_info:
-            raise TreeForgeBootstrapImageError(
-                "signed init_boot AVB "
-                "contract changed: "
-                f"{marker}"
-            )
+    if (
+        kernel_payload_bytes
+        != realized_payload_bytes
+        or kernel_payload_sha
+        != realized_payload_sha
+    ):
+        raise TreeForgeBootstrapImageError(
+            "owner signing changed the released "
+            "Bootstrap boot payload"
+        )
 
     boot_unpack = (
         IMAGE_WORK
@@ -1035,20 +1513,20 @@ def verify_image(
             )[1].strip()
 
             try:
-                kernel_size = int(raw_size)
+                kernel_size = int(
+                    raw_size
+                )
             except ValueError as exc:
                 raise TreeForgeBootstrapImageError(
                     "Bootstrap boot kernel size "
-                    "is not an integer: "
-                    f"{raw_size}"
+                    f"is not an integer: {raw_size}"
                 ) from exc
 
             break
 
     if kernel_size is None or kernel_size <= 0:
         raise TreeForgeBootstrapImageError(
-            "Bootstrap boot kernel is "
-            "missing or empty"
+            "Bootstrap boot kernel is missing or empty"
         )
 
     unpacked_kernel = (
@@ -1061,16 +1539,12 @@ def verify_image(
             "unpacked Bootstrap kernel missing"
         )
 
-    unpacked_kernel_size = (
+    if (
         unpacked_kernel.stat().st_size
-    )
-
-    if unpacked_kernel_size != kernel_size:
+        != kernel_size
+    ):
         raise TreeForgeBootstrapImageError(
-            "Bootstrap kernel header/file "
-            "size mismatch: "
-            f"header={kernel_size} "
-            f"file={unpacked_kernel_size}"
+            "Bootstrap kernel header/file size mismatch"
         )
 
     for marker in (
@@ -1080,8 +1554,7 @@ def verify_image(
     ):
         if marker not in boot_unpack_output:
             raise TreeForgeBootstrapImageError(
-                "Bootstrap boot structure "
-                "changed: "
+                "Bootstrap boot structure changed: "
                 f"{marker}"
             )
 
@@ -1116,8 +1589,7 @@ def verify_image(
     ):
         if marker not in unpack_output:
             raise TreeForgeBootstrapImageError(
-                "init_boot structural "
-                "contract changed: "
+                "init_boot structural contract changed: "
                 f"{marker}"
             )
 
@@ -1128,8 +1600,7 @@ def verify_image(
 
     if not unpacked_ramdisk.is_file():
         raise TreeForgeBootstrapImageError(
-            "unpacked init_boot ramdisk "
-            "missing"
+            "unpacked init_boot ramdisk missing"
         )
 
     runtime_sha = _sha256(
@@ -1142,12 +1613,14 @@ def verify_image(
 
     if runtime_sha != unpacked_sha:
         raise TreeForgeBootstrapImageError(
-            "signed init_boot ramdisk "
-            "does not match accepted "
-            "TreeForge runtime: "
-            f"{unpacked_sha} != "
-            f"{runtime_sha}"
+            "signed init_boot ramdisk does not match "
+            "the accepted TreeForge runtime: "
+            f"{unpacked_sha} != {runtime_sha}"
         )
+
+    boot_sha = _sha256(
+        OUTPUT_BOOT_IMAGE
+    )
 
     init_boot_sha = _sha256(
         OUTPUT_IMAGE
@@ -1155,9 +1628,26 @@ def verify_image(
 
     expected_metadata = (
         _expected_metadata(
-            init_boot_sha,
-            source_init_boot=source_init_boot,
-            source_vbmeta=source_vbmeta,
+            boot_sha=boot_sha,
+            init_boot_sha=init_boot_sha,
+            source_init_boot=(
+                resolved_source_init_boot
+            ),
+            source_vbmeta=(
+                resolved_source_vbmeta
+            ),
+            source_child_public_key_sha1=(
+                source_child_public_key_sha1
+            ),
+            signing_public_key_sha1=(
+                signing_public_key_sha1
+            ),
+            source_init_contract=(
+                source_init_contract
+            ),
+            vbmeta_rewrite_required=(
+                vbmeta_rewrite_required
+            ),
         )
     )
 
@@ -1172,17 +1662,12 @@ def verify_image(
         json.JSONDecodeError,
     ) as exc:
         raise TreeForgeBootstrapImageError(
-            "unable to read image "
-            "metadata"
+            "unable to read image metadata"
         ) from exc
 
-    if (
-        actual_metadata
-        != expected_metadata
-    ):
+    if actual_metadata != expected_metadata:
         raise TreeForgeBootstrapImageError(
-            "image metadata contract "
-            "changed"
+            "image metadata contract changed"
         )
 
     print(
@@ -1192,7 +1677,6 @@ def verify_image(
         "======================================="
     )
     print()
-
     print(
         f"Boot:          {OUTPUT_BOOT_IMAGE}"
     )
@@ -1202,9 +1686,7 @@ def verify_image(
     print(
         f"Boot SHA:      {boot_sha}"
     )
-
     print()
-
     print(
         f"Init boot:     {OUTPUT_IMAGE}"
     )
@@ -1217,12 +1699,10 @@ def verify_image(
     print(
         f"Ramdisk SHA:   {runtime_sha}"
     )
-
     print(
         "Public key:    "
-        + EXPECTED_PUBLIC_KEY_SHA1
+        + signing_public_key_sha1
     )
-
     print()
     print(
         "IMAGE_FAMILY=boot,init_boot"
@@ -1237,17 +1717,37 @@ def verify_image(
         "SIGNED_IMAGE=YES"
     )
     print(
-        "SIGNING_OWNER=TREEFORGE_BOOTSTRAP"
+        "SIGNING_OWNER=DOWNSTREAM_CONSUMER"
     )
+
+    if vbmeta_rewrite_required:
+        print(
+            "BOOT_VBMETA_CHAIN_MATCH=PENDING_REWRITE"
+        )
+        print(
+            "INIT_BOOT_VBMETA_CHAIN_MATCH=PENDING_REWRITE"
+        )
+    else:
+        print(
+            "BOOT_VBMETA_CHAIN_MATCH=PASS"
+        )
+        print(
+            "INIT_BOOT_VBMETA_CHAIN_MATCH=PASS"
+        )
+
     print(
-        "BOOT_VBMETA_CHAIN_MATCH=PASS"
+        "VBMETA_REWRITE_REQUIRED="
+        + (
+            "YES"
+            if vbmeta_rewrite_required
+            else "NO"
+        )
     )
+
     print(
-        "INIT_BOOT_VBMETA_CHAIN_MATCH=PASS"
+        "BOOT_PROVIDER_PAYLOAD_IDENTITY=PASS"
     )
-    print(
-        "VBMETA_REWRITE_REQUIRED=NO"
-    )
+
     print(
         "TREEFORGE_BOOTSTRAP_IMAGE_VERIFY=PASS"
     )

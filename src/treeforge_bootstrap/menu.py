@@ -28,6 +28,7 @@ class MenuAction(str, Enum):
     INSTALL_ROOT = "install_root"
     UNINSTALL_ROOT = "uninstall_root"
     TOGGLE_ROOT_PERSISTENCE = "toggle_root_persistence"
+    REBOOT_SYSTEM = "reboot_system"
     REBOOT_BOOTLOADER = "reboot_bootloader"
     REBOOT_RECOVERY = "reboot_recovery"
     SET_BOOT_TARGET_SLOT_A = "set_boot_target_slot_a"

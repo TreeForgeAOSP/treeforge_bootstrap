@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .version import runtime_abi_version
+
 import hashlib
 import io
 import json
@@ -58,25 +60,106 @@ PROVIDER_CHECKSUMS = (
     / "SHA256SUMS"
 )
 
+# TREEFORGE_MANAGER_BOOTSTRAP_UPDATE_V1
+#
+# This is a release-side contract only. TreeForge Manager and the
+# privileged on-device updater are implemented separately later.
+#
+# The complete init_boot image is never a Bootstrap release asset.
+# Manager consumes this manifest plus the released runtime provider
+# and reconstructs the currently installed init_boot locally.
+MANAGER_UPDATE_MANIFEST = (
+    PROVIDER_OUT
+    / (
+        PROVIDER_ROOT_NAME
+        + "-update-manifest.json"
+    )
+)
+
+VERSION_FILE = (
+    Path(__file__).resolve().parents[2]
+    / "VERSION"
+)
+
+SUPPORTED_KERNEL_ABI = (
+    "6.1.99-android14-11-"
+    "g3c76c2d71bb3-ab13202328"
+)
+
 EXPECTED_RUNTIME = {
     "initramfs.cpio":
         (
-            "bb6fcd24b5631b9fc8fe9faf0cd0dad1"
-            "4be84c30892a65c41e6d3d27346ce216"
+            "fdd9260eee0a5026af8c811ddfa762d9"
+            "03fd80f158caff960414081c195e7536"
         ),
 
     "initramfs.lz4":
         (
-            "e2edd9d62e634880e223a00994e10741"
-            "94657154b564d42988161b00640b08dd"
+            "9d53d60140f64bc23f11d27a03c9df2a"
+            "29c6159f3a811037aaac8c0a6ce6dc47"
         ),
 
     "treeforge-menu":
         (
-            "7402a0334ca44089b14af0d8b2636029"
-            "3629936ca0c50fd105a9fd34882949de"
+            "2e855661f724fb9fff0810edf7cd0aea5"
+            "9339e55a4c341f7c6ef378eac3e9cbf"
         ),
 }
+
+
+def _component_versions() -> dict[str, str]:
+    if not VERSION_FILE.is_file():
+        raise TreeForgeBootstrapProviderError(
+            f"VERSION metadata missing: {VERSION_FILE}"
+        )
+
+    values = {}
+
+    for raw in VERSION_FILE.read_text(
+        encoding="utf-8"
+    ).splitlines():
+        line = raw.strip()
+
+        if (
+            not line
+            or line.startswith("#")
+        ):
+            continue
+
+        if "=" not in line:
+            raise TreeForgeBootstrapProviderError(
+                f"invalid VERSION record: {line}"
+            )
+
+        key, value = line.split(
+            "=",
+            1,
+        )
+
+        values[key.strip()] = value.strip()
+
+    required = {
+        "bootstrap":
+            "TREEFORGE_BOOTSTRAP_VERSION",
+        "boot_manager":
+            "TREEFORGE_BOOT_MANAGER_VERSION",
+        "runtime_abi":
+            "TREEFORGE_RUNTIME_ABI_VERSION",
+    }
+
+    result = {}
+
+    for name, key in required.items():
+        value = values.get(key)
+
+        if not value:
+            raise TreeForgeBootstrapProviderError(
+                f"VERSION field missing: {key}"
+            )
+
+        result[name] = value
+
+    return result
 
 
 def _sha256_bytes(
@@ -154,6 +237,8 @@ def _accepted_payloads() -> dict[str, bytes]:
 def _provider_metadata(
     payloads: dict[str, bytes],
 ) -> bytes:
+    versions = _component_versions()
+
     metadata = {
         "schema": 1,
         "provider":
@@ -170,6 +255,14 @@ def _provider_metadata(
             "android-15",
         "menu_identity":
             "TreeForge Boot Manager",
+        "components": {
+            "bootstrap":
+                versions["bootstrap"],
+            "boot_manager":
+                versions["boot_manager"],
+            "runtime_abi":
+                versions["runtime_abi"],
+        },
         "signed_image":
             False,
         "signing_owner":
@@ -189,6 +282,8 @@ def _provider_metadata(
             )
         },
         "low_level_runtime_abi": {
+            "version":
+                runtime_abi_version(),
             "treeforge_bootstrap_framebuffer":
                 "v1",
             "first_stage_handoff":
@@ -206,6 +301,399 @@ def _provider_metadata(
     ).encode(
         "utf-8"
     )
+
+
+def _manager_update_metadata() -> bytes:
+    if not PROVIDER_ARCHIVE.is_file():
+        raise TreeForgeBootstrapProviderError(
+            "runtime provider must be packaged before "
+            "the Manager update manifest"
+        )
+
+    versions = _component_versions()
+
+    metadata = {
+        "schema":
+            "treeforge.manager.update.v1",
+
+        "component":
+            "bootstrap",
+
+        "release":
+            versions["bootstrap"],
+
+        "device":
+            "tangorpro",
+
+        "platform":
+            "android15",
+
+        "kernel_abi":
+            SUPPORTED_KERNEL_ABI,
+
+        "applicability": {
+            "requires_treeforge_installed":
+                True,
+
+            "install_state_schema":
+                "treeforge.manager.install-state.v1",
+
+            "device":
+                "tangorpro",
+
+            "accepted_kernel_abis": [
+                SUPPORTED_KERNEL_ABI
+            ],
+        },
+
+        "artifacts": {
+            "runtime": {
+                "filename":
+                    PROVIDER_ARCHIVE.name,
+
+                "sha256":
+                    _sha256_path(
+                        PROVIDER_ARCHIVE
+                    ),
+
+                "identity_scope":
+                    "release-download",
+
+                "bytes":
+                    PROVIDER_ARCHIVE.stat().st_size,
+
+                "redistribution":
+                    "public",
+
+                "install_realization":
+                    "as-downloaded",
+            },
+        },
+
+        "partitions": {
+            "boot": {
+                "operation":
+                    "preserve",
+            },
+
+            "init_boot": {
+                "operation":
+                    "reconstruct_current",
+
+                "source":
+                    "current-installed",
+
+                "replacements": [
+                    {
+                        "path":
+                            "ramdisk",
+
+                        "artifact":
+                            "runtime",
+                    }
+                ],
+
+                "signing":
+                    "owner-avb-local",
+
+                "avb_parent":
+                    "vbmeta",
+
+                "avb_parent_action":
+                    "preserve-chain",
+            },
+
+            "vendor_boot": {
+                "operation":
+                    "preserve",
+            },
+
+            "vendor_kernel_boot": {
+                "operation":
+                    "preserve",
+            },
+
+            "vendor_dlkm": {
+                "operation":
+                    "preserve",
+            },
+
+            "system_dlkm": {
+                "operation":
+                    "preserve",
+            },
+
+            "vbmeta": {
+                "operation":
+                    "preserve",
+            },
+
+            "vbmeta_system": {
+                "operation":
+                    "preserve",
+            },
+
+            "vbmeta_vendor": {
+                "operation":
+                    "preserve",
+            },
+        },
+
+        "reconstruction": {
+            "carrier_source":
+                "current-installed",
+
+            "proprietary_payload_distribution":
+                False,
+
+            "binary_patch_deltas":
+                False,
+
+            "supported_operations": [
+                "preserve",
+                "replace_whole",
+                "reconstruct_current",
+            ],
+        },
+    }
+
+    return (
+        json.dumps(
+            metadata,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode(
+        "utf-8"
+    )
+
+
+def _verify_manager_update_manifest() -> None:
+    if not MANAGER_UPDATE_MANIFEST.is_file():
+        raise TreeForgeBootstrapProviderError(
+            "Manager update manifest missing: "
+            f"{MANAGER_UPDATE_MANIFEST}"
+        )
+
+    try:
+        metadata = json.loads(
+            MANAGER_UPDATE_MANIFEST.read_text(
+                encoding="utf-8"
+            )
+        )
+    except (
+        OSError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+    ) as exc:
+        raise TreeForgeBootstrapProviderError(
+            "Manager update manifest unreadable"
+        ) from exc
+
+    versions = _component_versions()
+
+    expected = {
+        "schema":
+            "treeforge.manager.update.v1",
+
+        "component":
+            "bootstrap",
+
+        "release":
+            versions["bootstrap"],
+
+        "device":
+            "tangorpro",
+
+        "kernel_abi":
+            SUPPORTED_KERNEL_ABI,
+    }
+
+    for key, wanted in expected.items():
+        actual = metadata.get(key)
+
+        if actual != wanted:
+            raise TreeForgeBootstrapProviderError(
+                "Manager update manifest "
+                f"{key} changed: "
+                f"{actual!r} != {wanted!r}"
+            )
+
+    artifacts = metadata.get(
+        "artifacts",
+        {}
+    )
+
+    runtime = artifacts.get(
+        "runtime",
+        {}
+    )
+
+    if (
+        runtime.get("filename")
+        != PROVIDER_ARCHIVE.name
+    ):
+        raise TreeForgeBootstrapProviderError(
+            "Manager runtime filename changed"
+        )
+
+    if (
+        runtime.get("sha256")
+        != _sha256_path(
+            PROVIDER_ARCHIVE
+        )
+    ):
+        raise TreeForgeBootstrapProviderError(
+            "Manager runtime provider SHA changed"
+        )
+
+    if (
+        runtime.get("bytes")
+        != PROVIDER_ARCHIVE.stat().st_size
+    ):
+        raise TreeForgeBootstrapProviderError(
+            "Manager runtime provider size changed"
+        )
+
+    if (
+        runtime.get("identity_scope")
+        != "release-download"
+    ):
+        raise TreeForgeBootstrapProviderError(
+            "Manager runtime identity scope changed"
+        )
+
+    if (
+        runtime.get("install_realization")
+        != "as-downloaded"
+    ):
+        raise TreeForgeBootstrapProviderError(
+            "Manager runtime installation "
+            "realization changed"
+        )
+
+    partitions = metadata.get(
+        "partitions",
+        {}
+    )
+
+    init_boot = partitions.get(
+        "init_boot",
+        {}
+    )
+
+    if (
+        init_boot.get("operation")
+        != "reconstruct_current"
+    ):
+        raise TreeForgeBootstrapProviderError(
+            "Manager init_boot update operation changed"
+        )
+
+    if (
+        init_boot.get("source")
+        != "current-installed"
+    ):
+        raise TreeForgeBootstrapProviderError(
+            "Manager init_boot source changed"
+        )
+
+    if (
+        init_boot.get("signing")
+        != "owner-avb-local"
+    ):
+        raise TreeForgeBootstrapProviderError(
+            "Manager init_boot signing ownership changed"
+        )
+
+    if (
+        init_boot.get("avb_parent")
+        != "vbmeta"
+        or
+        init_boot.get("avb_parent_action")
+        != "preserve-chain"
+    ):
+        raise TreeForgeBootstrapProviderError(
+            "Manager init_boot AVB contract changed"
+        )
+
+    replacements = init_boot.get(
+        "replacements"
+    )
+
+    if replacements != [
+        {
+            "artifact": "runtime",
+            "path": "ramdisk",
+        }
+    ]:
+        raise TreeForgeBootstrapProviderError(
+            "Manager init_boot replacement "
+            "contract changed"
+        )
+
+    for name in (
+        "boot",
+        "vendor_boot",
+        "vendor_kernel_boot",
+        "vendor_dlkm",
+        "system_dlkm",
+        "vbmeta",
+        "vbmeta_system",
+        "vbmeta_vendor",
+    ):
+        operation = (
+            partitions.get(
+                name,
+                {}
+            ).get(
+                "operation"
+            )
+        )
+
+        if operation != "preserve":
+            raise TreeForgeBootstrapProviderError(
+                "Manager partition unexpectedly "
+                f"modified: {name}"
+            )
+
+    reconstruction = metadata.get(
+        "reconstruction",
+        {}
+    )
+
+    if (
+        reconstruction.get(
+            "carrier_source"
+        )
+        != "current-installed"
+    ):
+        raise TreeForgeBootstrapProviderError(
+            "Manager carrier source changed"
+        )
+
+    if (
+        reconstruction.get(
+            "proprietary_payload_distribution"
+        )
+        is not False
+    ):
+        raise TreeForgeBootstrapProviderError(
+            "Manager contract unexpectedly "
+            "distributes proprietary carriers"
+        )
+
+    if (
+        reconstruction.get(
+            "binary_patch_deltas"
+        )
+        is not False
+    ):
+        raise TreeForgeBootstrapProviderError(
+            "Manager contract unexpectedly "
+            "uses binary carrier deltas"
+        )
 
 
 def _checksums(
@@ -397,6 +885,12 @@ def package_provider() -> Path:
             checksums,
         )
 
+    MANAGER_UPDATE_MANIFEST.write_bytes(
+        _manager_update_metadata()
+    )
+
+    _verify_manager_update_manifest()
+
     print(
         "TreeForge Bootstrap Provider"
     )
@@ -417,6 +911,18 @@ def package_provider() -> Path:
         f"{_sha256_path(PROVIDER_ARCHIVE)}"
     )
     print()
+    print(
+        f"Manager manifest: "
+        f"{MANAGER_UPDATE_MANIFEST}"
+    )
+
+    print(
+        f"Manager manifest SHA: "
+        f"{_sha256_path(MANAGER_UPDATE_MANIFEST)}"
+    )
+
+    print()
+
     print(
         "SIGNED_IMAGE=NO"
     )
@@ -630,6 +1136,8 @@ def verify_provider() -> Path:
             "provider SHA256SUMS mismatch"
         )
 
+    _verify_manager_update_manifest()
+
     print(
         "PROVIDER_NAME="
         f"{PROVIDER_NAME}"
@@ -644,7 +1152,7 @@ def verify_provider() -> Path:
     )
     print(
         "TREEFORGE_BOOTSTRAP_RUNTIME_ABI="
-        "V1"
+        + runtime_abi_version()
     )
     print(
         "SIGNED_IMAGE=NO"
@@ -656,6 +1164,20 @@ def verify_provider() -> Path:
         f"PROVIDER_ARCHIVE_SHA256="
         f"{_sha256_path(PROVIDER_ARCHIVE)}"
     )
+    print(
+        f"MANAGER_UPDATE_MANIFEST="
+        f"{MANAGER_UPDATE_MANIFEST}"
+    )
+
+    print(
+        f"MANAGER_UPDATE_MANIFEST_SHA256="
+        f"{_sha256_path(MANAGER_UPDATE_MANIFEST)}"
+    )
+
+    print(
+        "TREEFORGE_BOOTSTRAP_MANAGER_UPDATE_CONTRACT=PASS"
+    )
+
     print(
         "TREEFORGE_BOOTSTRAP_PROVIDER_VERIFY=PASS"
     )

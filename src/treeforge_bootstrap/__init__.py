@@ -12,4 +12,6 @@ __all__ = (
     "TreeForgeDispatcherError",
 )
 
-__version__ = "0.1.0-dev"
+from .version import project_version
+
+__version__ = project_version()

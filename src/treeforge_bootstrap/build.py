@@ -215,11 +215,30 @@ def main() -> None:
     )
 
     parser.add_argument(
+        "--source-init-boot",
+        type=Path,
+        help=(
+            "Existing init_boot image whose AVB contract "
+            "is inherited by standalone image realization."
+        ),
+    )
+
+    parser.add_argument(
+        "--source-vbmeta",
+        type=Path,
+        help=(
+            "Existing root vbmeta image defining the current "
+            "boot/init_boot child AVB trust identity."
+        ),
+    )
+
+    parser.add_argument(
         "--avb-key",
         type=Path,
         help=(
-            "Explicit RSA private key for the "
-            "realized boot/init_boot AVB identity."
+            "Explicit unlocked RSA-2048 child private key "
+            "for boot/init_boot. Key lifecycle belongs to "
+            "the downstream consumer."
         ),
     )
 
@@ -284,13 +303,53 @@ def main() -> None:
             from .chromiumos_init_boot import build
             build()
         else:
-            build_image()
+            if (
+                args.avb_key is None
+                or args.source_init_boot is None
+                or args.source_vbmeta is None
+            ):
+                parser.error(
+                    "image requires --avb-key, "
+                    "--source-init-boot, and --source-vbmeta"
+                )
+
+            build_image(
+                source_init_boot=(
+                    args.source_init_boot
+                ),
+                source_vbmeta=(
+                    args.source_vbmeta
+                ),
+                signing_key=(
+                    args.avb_key
+                ),
+            )
     elif args.command == "verify-image":
         if BUILD_PROFILE == "treeforge-chromiumos":
             from .chromiumos_init_boot import verify
             verify()
         else:
-            verify_image()
+            if (
+                args.avb_key is None
+                or args.source_init_boot is None
+                or args.source_vbmeta is None
+            ):
+                parser.error(
+                    "verify-image requires --avb-key, "
+                    "--source-init-boot, and --source-vbmeta"
+                )
+
+            verify_image(
+                source_init_boot=(
+                    args.source_init_boot
+                ),
+                source_vbmeta=(
+                    args.source_vbmeta
+                ),
+                signing_key=(
+                    args.avb_key
+                ),
+            )
     elif args.command == "realize-family":
         if args.input_family is None:
             parser.error(
