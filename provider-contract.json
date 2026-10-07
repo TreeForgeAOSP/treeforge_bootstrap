@@ -1,17 +1,23 @@
 {
   "artifact": {
-    "bytes": 12219692,
+    "bytes": 12224840,
     "consumer_signing": "downstream_consumer",
     "menu_identity": "TreeForge Boot Manager",
-    "metadata_sha256": "bd01d892ac2e5d6452cb97a56fc1d034f3371276e8d67009e1796b18f18a5841",
+    "metadata_sha256": "b9a7715a40832675c27bb93b2d88dace0120e852659cb269238ddba230150326",
     "name": "treeforge-bootstrap-tangorpro-android15-runtime.tar.xz",
-    "sha256": "15b132ad6c1cc63f5b087b6d2ba7d497558f72b02114bfc8da264bff51160d16",
+    "sha256": "edfc84f026a4b60bc3fb50601c7b2ca265dc3deeedd0da8b872b4c4b40c5e68f",
     "sha256_state": "verified-reproducible",
-    "sha256sums_sha256": "c06ce6c72a75b62b042077f0064a38295bdc1f776fa101dd804381b56c56dae2",
+    "sha256sums_sha256": "0ef3d0772a74f40a305b57f5a64a46abe86ce97a2f6573d17eb0f185fad63661",
     "signed_image": false
   },
   "consumer": "downstream",
   "device": "tangorpro",
+  "manager_update_manifest": {
+    "bytes": 1886,
+    "name": "treeforge-bootstrap-tangorpro-android15-runtime-update-manifest.json",
+    "schema": "treeforge.manager.update.v1",
+    "sha256": "fd837bfdf6d5ed40e95b23d8639d8b94d5a2f829ff987b03bf57f95f67a0f6fc"
+  },
   "name": "treeforge-bootstrap",
   "platform": "android-15",
   "providers": {
@@ -63,7 +69,7 @@
     "runtime_dependency": {
       "name": "treeforge-bootstrap-tangorpro-android15-runtime.tar.xz",
       "required": true,
-      "sha256": "15b132ad6c1cc63f5b087b6d2ba7d497558f72b02114bfc8da264bff51160d16"
+      "sha256": "edfc84f026a4b60bc3fb50601c7b2ca265dc3deeedd0da8b872b4c4b40c5e68f"
     },
     "sha256_state": "derived-from-final-release-build"
   },
@@ -81,12 +87,12 @@
     "host_realizer_requires_google_seed": false,
     "host_realizer_requires_kernel_checkout": false,
     "host_realizer_requires_runtime_json": false,
-    "provider_archive_sha256": "15b132ad6c1cc63f5b087b6d2ba7d497558f72b02114bfc8da264bff51160d16",
+    "provider_archive_sha256": "edfc84f026a4b60bc3fb50601c7b2ca265dc3deeedd0da8b872b4c4b40c5e68f",
     "provider_only_realization": true,
-    "realized_boot_sha256": "59d9103f7c9e343a96af6d37f9307f4610db7d228976b9d67ac59fab00bcf20b",
-    "realized_init_boot_sha256": "322dc7baa40e10b4fdf4ccb4e8e64d0a7266cf8229bae3a70b66b37d110e924f",
-    "realized_manifest_sha256": "d7b34c73b1674f3b80d2fd9de4817d62aeaf1117c8da12264cd5ce6eb0897bc8",
-    "runtime_source_commit": "f1c03103a940bf39054b8fca96e09a9c34332a10",
+    "realized_boot_sha256": "c1335cb683b975bb395f1af87e6a4bef01d8b3e0b004d55ac33339e01f715120",
+    "realized_init_boot_sha256": "731146bbec3ed8874cb41a0f10ef3f76da6bdd375687dae8f5a8cf05335bc9c1",
+    "realized_manifest_sha256": "8d896d9fee482c3cb6e70c97382545e17b67f0b579f134618fbec78b9bdfebd9",
+    "runtime_source_commit": "4793555221dcdc322302a6c4d40b648cf99adcd0",
     "storage_alt_os_regression_passed": true
   },
   "role": "persistent-installed-bootstrap",
@@ -96,16 +102,16 @@
     "menu_identity": "TreeForge Boot Manager",
     "payload": {
       "initramfs.cpio": {
-        "bytes": 15580184,
-        "sha256": "bb6fcd24b5631b9fc8fe9faf0cd0dad14be84c30892a65c41e6d3d27346ce216"
+        "bytes": 15584512,
+        "sha256": "fdd9260eee0a5026af8c811ddfa762d903fd80f158caff960414081c195e7536"
       },
       "initramfs.lz4": {
-        "bytes": 7744040,
-        "sha256": "e2edd9d62e634880e223a00994e1074194657154b564d42988161b00640b08dd"
+        "bytes": 7746013,
+        "sha256": "9d53d60140f64bc23f11d27a03c9df2a29c6159f3a811037aaac8c0a6ce6dc47"
       },
       "treeforge-menu": {
-        "bytes": 10220161,
-        "sha256": "7402a0334ca44089b14af0d8b26360293629936ca0c50fd105a9fd34882949de"
+        "bytes": 10224489,
+        "sha256": "2e855661f724fb9fff0810edf7cd0aea59339e55a4c341f7c6ef378eac3e9cbf"
       }
     },
     "reproducible": true,
@@ -113,5 +119,5 @@
     "signed_image": false
   },
   "schema": 1,
-  "status": "v1.0b3-runtime-realizer-release-contract"
+  "status": "v1.0b4-runtime-realizer-release-contract"
 }
