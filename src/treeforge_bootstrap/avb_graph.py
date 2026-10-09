@@ -9,6 +9,10 @@ import subprocess
 from typing import Any
 
 from .host_providers import ensure_host_tool
+from .kernel_carriers import (
+    TreeForgeKernelCarrierError,
+    realize_kernel_carriers,
+)
 
 from .image import (
     OUTPUT_BOOT_IMAGE,
@@ -1484,15 +1488,65 @@ def _rebuild_root_for_boot_chain_key(
     ]
 
     #
-    # This ordering already reproduced the accepted tangorpro root
-    # descriptor population in the host proof.
+    # Root vbmeta receives descriptors and property descriptors from
+    # these realized children. Preserve any original root properties
+    # which are not carried by the replacement child images.
     #
-    for name in (
+    root_descriptor_sources = (
         "vendor_boot",
         "vendor_kernel_boot",
         "vendor_dlkm",
         "dtbo",
-    ):
+    )
+
+    inherited_properties = []
+
+    for name in root_descriptor_sources:
+        inherited_properties.extend(
+            _properties(
+                _info_image(
+                    avbtool,
+                    realized_images[name],
+                )
+            )
+        )
+
+    unmatched_inherited = list(
+        inherited_properties
+    )
+
+    explicit_properties = []
+
+    for pair in before_properties:
+        if pair in unmatched_inherited:
+            unmatched_inherited.remove(
+                pair
+            )
+        else:
+            explicit_properties.append(
+                pair
+            )
+
+    if unmatched_inherited:
+        raise TreeForgeBootstrapAvbGraphError(
+            "realized root child images introduce "
+            "unexpected AVB properties: "
+            f"{unmatched_inherited}"
+        )
+
+    for key, value in explicit_properties:
+        command.extend(
+            [
+                "--prop",
+                f"{key}:{value}",
+            ]
+        )
+
+    #
+    # This ordering already reproduced the accepted tangorpro root
+    # descriptor population in the host proof.
+    #
+    for name in root_descriptor_sources:
         command.extend(
             [
                 "--include_descriptors_from_image",
@@ -1525,18 +1579,38 @@ def _rebuild_root_for_boot_chain_key(
         after
     )
 
-    if (
-        _descriptor_map(after)
-        != before_descriptors
-    ):
-        raise TreeForgeBootstrapAvbGraphError(
-            "root non-chain AVB descriptors "
-            "changed"
-        )
+    after_descriptors = _descriptor_map(
+        after
+    )
 
     if (
-        _properties(after)
-        != before_properties
+        set(after_descriptors)
+        != set(before_descriptors)
+    ):
+        raise TreeForgeBootstrapAvbGraphError(
+            "root non-chain AVB descriptor "
+            "population changed"
+        )
+
+    for partition in ROOT_DESCRIPTOR_TARGETS:
+        if partition in {
+            "vendor_kernel_boot",
+            "vendor_dlkm",
+        }:
+            continue
+
+        if (
+            after_descriptors.get(partition)
+            != before_descriptors.get(partition)
+        ):
+            raise TreeForgeBootstrapAvbGraphError(
+                "unexpected root AVB descriptor "
+                f"change: {partition}"
+            )
+
+    if (
+        sorted(_properties(after))
+        != sorted(before_properties)
     ):
         raise TreeForgeBootstrapAvbGraphError(
             "root AVB properties changed"
@@ -1625,6 +1699,291 @@ def _rebuild_root_for_boot_chain_key(
 
     temporary.replace(
         root_image
+    )
+
+
+
+def _realize_kernel_carriers_for_family(
+    *,
+    input_root: Path,
+    output_root: Path,
+) -> dict[str, Path]:
+    """
+    Reconstruct the TreeForge Kernel carrier family from the
+    verified original image family and the published kernel
+    module provider.
+
+    No TreeForge Kernel source checkout or prebuilt carrier
+    partition image is required.
+    """
+    try:
+        return realize_kernel_carriers(
+            input_root=input_root,
+            output_root=output_root,
+        )
+
+    except TreeForgeKernelCarrierError as exc:
+        raise TreeForgeBootstrapAvbGraphError(
+            "TreeForge Kernel carrier reconstruction "
+            f"failed: {exc}"
+        ) from exc
+
+
+def _rebuild_vbmeta_system_for_realized_images(
+    *,
+    avbtool: Path,
+    realized_images: dict[str, Path],
+    signing_key: Path,
+) -> None:
+    image = realized_images["vbmeta_system"]
+
+    before = _info_image(
+        avbtool,
+        image,
+    )
+
+    before_header = _header_fields(
+        before
+    )
+
+    before_descriptors = _descriptor_map(
+        before
+    )
+
+    before_properties = _properties(
+        before
+    )
+
+    existing_pub = (
+        REALIZED_KEY_WORK
+        / "existing-vbmeta-system.avbpubkey"
+    )
+
+    supplied_pub = (
+        REALIZED_KEY_WORK
+        / "supplied-vbmeta-system.avbpubkey"
+    )
+
+    for target in (
+        existing_pub,
+        supplied_pub,
+    ):
+        if target.exists():
+            target.unlink()
+
+    _extract_embedded_public_key(
+        avbtool,
+        image,
+        existing_pub,
+    )
+
+    _extract_private_public_key(
+        avbtool,
+        signing_key,
+        supplied_pub,
+    )
+
+    if (
+        existing_pub.read_bytes()
+        != supplied_pub.read_bytes()
+    ):
+        raise TreeForgeBootstrapAvbGraphError(
+            "Owner child key does not match "
+            "vbmeta_system signing identity"
+        )
+
+    required_header = (
+        "Algorithm",
+        "Rollback Index",
+        "Rollback Index Location",
+        "Flags",
+    )
+
+    for field in required_header:
+        if before_header.get(field) is None:
+            raise TreeForgeBootstrapAvbGraphError(
+                "vbmeta_system is missing "
+                f"{field}"
+            )
+
+    temporary = (
+        REALIZED_WORK
+        / ".vbmeta_system.rewritten.img"
+    )
+
+    if temporary.exists():
+        temporary.unlink()
+
+    command = [
+        str(avbtool),
+        "make_vbmeta_image",
+
+        "--output",
+        str(temporary),
+
+        "--algorithm",
+        before_header["Algorithm"],
+
+        "--key",
+        str(signing_key),
+
+        "--rollback_index",
+        before_header["Rollback Index"],
+
+        "--rollback_index_location",
+        before_header[
+            "Rollback Index Location"
+        ],
+
+        "--flags",
+        before_header["Flags"],
+
+        "--padding_size",
+        str(image.stat().st_size),
+    ]
+
+    if isinstance(
+        before_properties,
+        dict,
+    ):
+        property_items = tuple(
+            before_properties.items()
+        )
+    else:
+        property_items = tuple(
+            before_properties
+        )
+
+    #
+    # --include_descriptors_from_image also imports property
+    # descriptors carried by the child image. Do not explicitly
+    # replay properties that the included children already provide,
+    # otherwise vbmeta_system receives duplicate property
+    # descriptors.
+    #
+    inherited_properties = []
+
+    for name in SYSTEM_DESCRIPTOR_TARGETS:
+        inherited_properties.extend(
+            _properties(
+                _info_image(
+                    avbtool,
+                    realized_images[name],
+                )
+            )
+        )
+
+    unmatched_inherited = list(
+        inherited_properties
+    )
+
+    explicit_properties = []
+
+    for pair in property_items:
+        if pair in unmatched_inherited:
+            unmatched_inherited.remove(
+                pair
+            )
+        else:
+            explicit_properties.append(
+                pair
+            )
+
+    if unmatched_inherited:
+        raise TreeForgeBootstrapAvbGraphError(
+            "realized vbmeta_system child images "
+            "introduce unexpected AVB properties: "
+            f"{unmatched_inherited}"
+        )
+
+    for key, value in explicit_properties:
+        command.extend(
+            [
+                "--prop",
+                f"{key}:{value}",
+            ]
+        )
+
+    for name in SYSTEM_DESCRIPTOR_TARGETS:
+        command.extend(
+            [
+                "--include_descriptors_from_image",
+                str(realized_images[name]),
+            ]
+        )
+
+    _run(command)
+
+    if (
+        temporary.stat().st_size
+        != image.stat().st_size
+    ):
+        raise TreeForgeBootstrapAvbGraphError(
+            "rewritten vbmeta_system size changed"
+        )
+
+    after = _info_image(
+        avbtool,
+        temporary,
+    )
+
+    after_header = _header_fields(
+        after
+    )
+
+    for field in required_header:
+        if (
+            after_header.get(field)
+            != before_header.get(field)
+        ):
+            raise TreeForgeBootstrapAvbGraphError(
+                "vbmeta_system header changed: "
+                f"{field}"
+            )
+
+    if (
+        sorted(_properties(after))
+        != sorted(property_items)
+    ):
+        raise TreeForgeBootstrapAvbGraphError(
+            "vbmeta_system properties changed"
+        )
+
+    after_descriptors = _descriptor_map(
+        after
+    )
+
+    if (
+        set(after_descriptors)
+        != set(before_descriptors)
+    ):
+        raise TreeForgeBootstrapAvbGraphError(
+            "vbmeta_system descriptor population changed"
+        )
+
+    for name in SYSTEM_DESCRIPTOR_TARGETS:
+        if name == "system_dlkm":
+            continue
+
+        if (
+            after_descriptors.get(name)
+            != before_descriptors.get(name)
+        ):
+            raise TreeForgeBootstrapAvbGraphError(
+                "unexpected vbmeta_system descriptor "
+                f"change: {name}"
+            )
+
+    if (
+        after_descriptors.get("system_dlkm")
+        == before_descriptors.get("system_dlkm")
+    ):
+        raise TreeForgeBootstrapAvbGraphError(
+            "system_dlkm descriptor did not change"
+        )
+
+    temporary.replace(
+        image
     )
 
 
@@ -1843,6 +2202,8 @@ def realize_family(
         in source_images.items()
     }
 
+    kernel_carriers: dict[str, Path] = {}
+
     #
     # Build the two TreeForge-owned boot-family outputs using the
     # backed-up init_boot/root-vbmeta as the source contract.
@@ -1940,6 +2301,18 @@ def realize_family(
         exist_ok=False,
     )
 
+    kernel_carrier_work = (
+        REALIZED_WORK
+        / ".kernel-carriers"
+    )
+
+    kernel_carriers = (
+        _realize_kernel_carriers_for_family(
+            input_root=images_root,
+            output_root=kernel_carrier_work,
+        )
+    )
+
     realized_images: dict[
         str,
         Path,
@@ -1963,6 +2336,12 @@ def realize_family(
                 destination,
             )
 
+        elif name in kernel_carriers:
+            _copy_generated(
+                kernel_carriers[name],
+                destination,
+            )
+
         else:
             _copy_passthrough(
                 source_images[name],
@@ -1971,6 +2350,11 @@ def realize_family(
 
         realized_images[name] = (
             destination
+        )
+
+    if kernel_carrier_work.exists():
+        shutil.rmtree(
+            kernel_carrier_work
         )
 
     trust_realization = (
@@ -1985,17 +2369,67 @@ def realize_family(
         )
     )
 
+    if parent_vbmeta_key is None:
+        raise TreeForgeBootstrapAvbGraphError(
+            "kernel carrier replacement requires "
+            "the Owner root vbmeta key"
+        )
+
+    _rebuild_vbmeta_system_for_realized_images(
+        avbtool=avbtool,
+        realized_images=realized_images,
+        signing_key=avb_key,
+    )
+
+    carrier_child_pub = (
+        REALIZED_KEY_WORK
+        / "kernel-carrier-child.avbpubkey"
+    )
+
+    if carrier_child_pub.exists():
+        carrier_child_pub.unlink()
+
+    _extract_private_public_key(
+        avbtool,
+        avb_key,
+        carrier_child_pub,
+    )
+
+    _rebuild_root_for_boot_chain_key(
+        avbtool=avbtool,
+        realized_images=realized_images,
+        replacement_child_pubkey=(
+            carrier_child_pub
+        ),
+        replacement_child_sha1=(
+            _sha1(
+                carrier_child_pub
+            )
+        ),
+        parent_vbmeta_key=(
+            parent_vbmeta_key
+            .expanduser()
+            .resolve()
+        ),
+    )
+
+    trust_realization[
+        "root_vbmeta_rewritten"
+    ] = True
+
+    trust_realization[
+        "vbmeta_system_rewritten"
+    ] = True
+
     allowed_changed = {
         "boot",
         "init_boot",
+        "vendor_kernel_boot",
+        "vendor_dlkm",
+        "system_dlkm",
+        "vbmeta_system",
+        "vbmeta",
     }
-
-    if trust_realization[
-        "root_vbmeta_rewritten"
-    ]:
-        allowed_changed.add(
-            "vbmeta"
-        )
 
     _verify_passthrough_identity(
         source_images,
@@ -2056,7 +2490,6 @@ def realize_family(
     # in the compatible-trust path.
     #
     identity_required = {
-        "vbmeta_system",
         "vbmeta_vendor",
     }
 
@@ -2130,6 +2563,12 @@ def realize_family(
                 ]
                 else "bootstrap-runtime"
             )
+
+        elif name in kernel_carriers:
+            role = "kernel-family-carrier"
+
+        elif name == "vbmeta_system":
+            role = "avb-system-rewrite"
 
         elif (
             name == "vbmeta"
@@ -2226,7 +2665,7 @@ def realize_family(
                 ],
 
             "vbmeta_system_rewritten":
-                False,
+                True,
 
             "vbmeta_vendor_rewritten":
                 False,

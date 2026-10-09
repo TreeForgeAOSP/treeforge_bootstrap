@@ -9106,7 +9106,7 @@ static int tfb_realize_touchscreen_modules(
     if (
         !tfb_busybox_insmod_if_missing(
             "/sys/module/goog_usi_stylus",
-            "exec /dev/treeforge-bootstrap-runtime/system/bin/busybox insmod /vendor_dlkm/lib/modules/$(/dev/treeforge-bootstrap-runtime/system/bin/busybox uname -r)/extra/private/google-modules/touch/common/usi/goog_usi_stylus.ko",
+            "exec /dev/treeforge-bootstrap-runtime/system/bin/busybox insmod /vendor_dlkm/lib/modules/goog_usi_stylus.ko",
             "touchscreen module=goog_usi_stylus state=already-loaded",
             "touchscreen module=goog_usi_stylus state=loaded",
             "touchscreen module=goog_usi_stylus state=failed",
@@ -9127,7 +9127,7 @@ static int tfb_realize_touchscreen_modules(
     if (
         !tfb_busybox_insmod_if_missing(
             "/sys/module/goog_touch_interface",
-            "exec /dev/treeforge-bootstrap-runtime/system/bin/busybox insmod /vendor_dlkm/lib/modules/$(/dev/treeforge-bootstrap-runtime/system/bin/busybox uname -r)/extra/private/google-modules/touch/common/goog_touch_interface.ko",
+            "exec /dev/treeforge-bootstrap-runtime/system/bin/busybox insmod /vendor_dlkm/lib/modules/goog_touch_interface.ko",
             "touchscreen module=goog_touch_interface state=already-loaded",
             "touchscreen module=goog_touch_interface state=loaded",
             "touchscreen module=goog_touch_interface state=failed",
@@ -9148,7 +9148,7 @@ static int tfb_realize_touchscreen_modules(
     if (
         !tfb_busybox_insmod_if_missing(
             "/sys/module/nvt_touch",
-            "exec /dev/treeforge-bootstrap-runtime/system/bin/busybox insmod /vendor_dlkm/lib/modules/$(/dev/treeforge-bootstrap-runtime/system/bin/busybox uname -r)/extra/private/google-modules/touch/novatek/nt36xxx/nvt_touch.ko",
+            "exec /dev/treeforge-bootstrap-runtime/system/bin/busybox insmod /vendor_dlkm/lib/modules/nvt_touch.ko",
             "touchscreen module=nvt_touch state=already-loaded",
             "touchscreen module=nvt_touch state=loaded",
             "touchscreen module=nvt_touch state=failed",

@@ -90,7 +90,7 @@ The update manifest provides the machine-readable Bootstrap update contract used
 
 ## Kernel dependency
 
-Bootstrap `v1.0b5` uses TreeForge Kernel `r0.94-v1.0b1`.
+Bootstrap `v1.0b5` uses TreeForge Kernel `r0.94-v1.0b2`.
 
 The matching kernel artifact is acquired and verified by the Bootstrap kernel provider.
 

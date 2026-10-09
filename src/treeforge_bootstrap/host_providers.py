@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+
 import hashlib
 import json
 import os
@@ -50,6 +52,66 @@ CLANG_REPOSITORY = (
 
 CLANG_RELATIVE = Path(
     "clang-r487747c/bin/clang"
+)
+
+
+
+#
+# Pinned AOSP host FEC utility required by avbtool when
+# constructing dm-verity/FEC hashtree footers.
+#
+FEC_EXPECTED_BYTES = 1437576
+
+FEC_EXPECTED_SHA256 = (
+    "d02174c8db5436a45c6293d537987951"
+    "954c41ca1bc209ab9f30dc313f5b6c02"
+)
+
+FEC_CACHE = (
+    KERNEL_CACHE_ROOT
+    / KERNEL_RELEASE
+    / "build-tools"
+    / "linux-x86"
+    / "bin"
+    / "fec"
+)
+
+FEC_URL = (
+    "https://android.googlesource.com/"
+    "kernel/prebuilts/build-tools/+/"
+    "refs/tags/"
+    + KERNEL_RELEASE
+    + "/linux-x86/bin/fec?format=TEXT"
+)
+
+
+
+#
+# Exact avbtool used by the android-15.0.0_r0.94 kernel
+# build for DLKM hashtree realization.
+#
+KERNEL_AVBTOOL_EXPECTED_BYTES = 21054298
+
+KERNEL_AVBTOOL_EXPECTED_SHA256 = (
+    "487777499b3269a937b1c3e54053c23b"
+    "009847d0dea0fd0ab5269f3ddb87a506"
+)
+
+KERNEL_AVBTOOL_CACHE = (
+    KERNEL_CACHE_ROOT
+    / KERNEL_RELEASE
+    / "build-tools"
+    / "linux-x86"
+    / "bin"
+    / "avbtool"
+)
+
+KERNEL_AVBTOOL_URL = (
+    "https://android.googlesource.com/"
+    "kernel/prebuilts/build-tools/+/"
+    "refs/tags/"
+    + KERNEL_RELEASE
+    + "/linux-x86/bin/avbtool?format=TEXT"
 )
 
 
@@ -928,6 +990,284 @@ def _fetch_host_provider(
             raise
 
     return cache
+
+
+
+def _verify_fec(path: Path) -> None:
+    if not path.is_file():
+        raise HostProviderError(
+            f"fec missing: {path}"
+        )
+
+    size = path.stat().st_size
+
+    if size != FEC_EXPECTED_BYTES:
+        raise HostProviderError(
+            "fec size changed: "
+            f"{size} != {FEC_EXPECTED_BYTES}"
+        )
+
+    actual = sha256(path)
+
+    if actual != FEC_EXPECTED_SHA256:
+        raise HostProviderError(
+            "fec identity changed: "
+            f"{actual}"
+        )
+
+
+
+def _verify_kernel_avbtool(
+    path: Path,
+) -> None:
+    if not path.is_file():
+        raise HostProviderError(
+            f"kernel avbtool missing: {path}"
+        )
+
+    size = path.stat().st_size
+
+    if size != KERNEL_AVBTOOL_EXPECTED_BYTES:
+        raise HostProviderError(
+            "kernel avbtool size changed: "
+            f"{size} != "
+            f"{KERNEL_AVBTOOL_EXPECTED_BYTES}"
+        )
+
+    actual = sha256(
+        path
+    )
+
+    if (
+        actual
+        != KERNEL_AVBTOOL_EXPECTED_SHA256
+    ):
+        raise HostProviderError(
+            "kernel avbtool identity changed: "
+            f"{actual}"
+        )
+
+
+def ensure_kernel_avbtool() -> Path:
+    try:
+        _verify_kernel_avbtool(
+            KERNEL_AVBTOOL_CACHE
+        )
+
+        return KERNEL_AVBTOOL_CACHE
+
+    except HostProviderError:
+        pass
+
+    KERNEL_AVBTOOL_CACHE.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    with tempfile.TemporaryDirectory(
+        prefix=".kernel-avbtool-download-",
+        dir=KERNEL_AVBTOOL_CACHE.parent,
+    ) as raw:
+        temporary = Path(raw)
+
+        encoded = (
+            temporary
+            / "avbtool.b64"
+        )
+
+        candidate = (
+            temporary
+            / "avbtool"
+        )
+
+        request = urllib.request.Request(
+            KERNEL_AVBTOOL_URL,
+            headers={
+                "User-Agent":
+                    "TreeForge-Bootstrap/1",
+            },
+        )
+
+        try:
+            with urllib.request.urlopen(
+                request,
+                timeout=60,
+            ) as response:
+                encoded.write_bytes(
+                    response.read()
+                )
+
+        except (
+            OSError,
+            urllib.error.URLError,
+        ) as exc:
+            raise HostProviderError(
+                "unable to fetch pinned "
+                "kernel avbtool"
+            ) from exc
+
+        try:
+            candidate.write_bytes(
+                base64.b64decode(
+                    encoded.read_bytes()
+                )
+            )
+
+        except Exception as exc:
+            raise HostProviderError(
+                "unable to decode pinned "
+                "kernel avbtool"
+            ) from exc
+
+        candidate.chmod(
+            0o755
+        )
+
+        _verify_kernel_avbtool(
+            candidate
+        )
+
+        replacement = (
+            KERNEL_AVBTOOL_CACHE.parent
+            / ".avbtool.new"
+        )
+
+        if replacement.exists():
+            replacement.unlink()
+
+        shutil.copyfile(
+            candidate,
+            replacement,
+        )
+
+        replacement.chmod(
+            0o755
+        )
+
+        _verify_kernel_avbtool(
+            replacement
+        )
+
+        replacement.replace(
+            KERNEL_AVBTOOL_CACHE
+        )
+
+    _verify_kernel_avbtool(
+        KERNEL_AVBTOOL_CACHE
+    )
+
+    return KERNEL_AVBTOOL_CACHE
+
+
+
+def ensure_fec() -> Path:
+    try:
+        _verify_fec(
+            FEC_CACHE
+        )
+
+        return FEC_CACHE
+
+    except HostProviderError:
+        pass
+
+    FEC_CACHE.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    with tempfile.TemporaryDirectory(
+        prefix=".fec-download-",
+        dir=FEC_CACHE.parent,
+    ) as raw:
+        temporary = Path(raw)
+
+        encoded = (
+            temporary
+            / "fec.b64"
+        )
+
+        candidate = (
+            temporary
+            / "fec"
+        )
+
+        request = urllib.request.Request(
+            FEC_URL,
+            headers={
+                "User-Agent":
+                    "TreeForge-Bootstrap/1",
+            },
+        )
+
+        try:
+            with urllib.request.urlopen(
+                request,
+                timeout=60,
+            ) as response:
+                encoded.write_bytes(
+                    response.read()
+                )
+
+        except (
+            OSError,
+            urllib.error.URLError,
+        ) as exc:
+            raise HostProviderError(
+                "unable to fetch pinned AOSP fec"
+            ) from exc
+
+        try:
+            candidate.write_bytes(
+                base64.b64decode(
+                    encoded.read_bytes()
+                )
+            )
+
+        except Exception as exc:
+            raise HostProviderError(
+                "unable to decode pinned AOSP fec"
+            ) from exc
+
+        candidate.chmod(
+            0o755
+        )
+
+        _verify_fec(
+            candidate
+        )
+
+        replacement = (
+            FEC_CACHE.parent
+            / ".fec.new"
+        )
+
+        if replacement.exists():
+            replacement.unlink()
+
+        shutil.copyfile(
+            candidate,
+            replacement,
+        )
+
+        replacement.chmod(
+            0o755
+        )
+
+        _verify_fec(
+            replacement
+        )
+
+        replacement.replace(
+            FEC_CACHE
+        )
+
+    _verify_fec(
+        FEC_CACHE
+    )
+
+    return FEC_CACHE
+
 
 
 def ensure_host_provider(

@@ -88,19 +88,19 @@ SUPPORTED_KERNEL_ABI = (
 
 EXPECTED_RUNTIME = {
     "initramfs.cpio": (
-        "f29d6bc98849d2d397152217b95cc4a0"
-        "758d374b6fdc3ae2dfecaacb5462efd6"
-    ),
+            "e9d18d1e54585ad92e1477d2a6e7f34c"
+            "8f5540ff2354e38f5e0c7c6f08bf0201"
+        ),
 
     "initramfs.lz4": (
-        "c09e33823a97410da89a9f0426d25ea7"
-        "ced25e8c8813c60b210a751f5926e48d"
-    ),
+            "f2c78a649874e40483ab9a412470ca2e"
+            "44edfaf1f9b4a924da90620e54b5d412"
+        ),
 
     "treeforge-menu": (
-        "f1354cca8a67c606bc1635919b20f2bd"
-        "1890e429ace577385faefea615eefa07"
-    ),
+            "7384702c4ecf5c47d1dc58a39e0ec187"
+            "b0a0339fe9cd65ff0e0d1ac016afd094"
+        ),
 
 }
 

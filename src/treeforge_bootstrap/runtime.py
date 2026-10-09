@@ -79,7 +79,7 @@ RUNTIME_METADATA = (
 
 
 #
-# v1.0b5 hardware-candidate frozen runtime identities.
+# v1.0b6 hardware-candidate frozen runtime identities.
 #
 # These identify the exact payload published by the TreeForge Bootstrap
 # runtime provider. They intentionally do not require the canonical
@@ -87,25 +87,25 @@ RUNTIME_METADATA = (
 # verify_runtime().
 #
 FROZEN_RUNTIME_CPIO_SHA256 = (
-    "f29d6bc98849d2d397152217b95cc4a0"
-    "758d374b6fdc3ae2dfecaacb5462efd6"
+    "e9d18d1e54585ad92e1477d2a6e7f34c"
+    "8f5540ff2354e38f5e0c7c6f08bf0201"
 )
 
-FROZEN_RUNTIME_CPIO_BYTES = 15_587_488
+FROZEN_RUNTIME_CPIO_BYTES = 15_587_160
 
 FROZEN_RUNTIME_LZ4_SHA256 = (
-    "c09e33823a97410da89a9f0426d25ea7"
-    "ced25e8c8813c60b210a751f5926e48d"
+    "f2c78a649874e40483ab9a412470ca2e"
+    "44edfaf1f9b4a924da90620e54b5d412"
 )
 
-FROZEN_RUNTIME_LZ4_BYTES = 7_747_791
+FROZEN_RUNTIME_LZ4_BYTES = 7_747_681
 
 FROZEN_RUNTIME_MENU_SHA256 = (
-    "f1354cca8a67c606bc1635919b20f2bd"
-    "1890e429ace577385faefea615eefa07"
+    "7384702c4ecf5c47d1dc58a39e0ec187"
+    "b0a0339fe9cd65ff0e0d1ac016afd094"
 )
 
-FROZEN_RUNTIME_MENU_BYTES = 10_227_465
+FROZEN_RUNTIME_MENU_BYTES = 10_227_137
 
 def _sha256(
     path: Path,

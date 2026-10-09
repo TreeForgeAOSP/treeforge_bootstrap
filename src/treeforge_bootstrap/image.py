@@ -1426,7 +1426,7 @@ def verify_image(
 
     #
     # Verify that changing the boot signer did not alter the
-    # published r0.94-v1.0b1 boot payload.
+    # published r0.94-v1.0b2 boot payload.
     #
     from .owner_family import (
         OwnerFamilyError,
