@@ -6,6 +6,11 @@ import os
 from pathlib import Path
 import shutil
 
+from .canonical_initramfs import ensure_canonical_provider
+from .external_providers import (
+    ensure_declared_external_providers,
+)
+
 from .paths import (
     OUT,
     PROVIDERS,
@@ -91,6 +96,10 @@ def _clang() -> Path:
     return ensure_clang()
 
 def doctor() -> None:
+    ensure_canonical_provider()
+
+    ensure_declared_external_providers()
+
     if not CANONICAL_PROVIDER.is_file():
         raise TreeForgeBootstrapBuildError(
             "canonical Google provider missing: "

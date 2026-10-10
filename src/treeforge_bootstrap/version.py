@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date
+
 from pathlib import Path
 
 
@@ -57,8 +59,11 @@ def _versions() -> dict[str, str]:
 
     required = {
         "TREEFORGE_BOOTSTRAP_VERSION",
+        "TREEFORGE_BOOT_MENU_VERSION",
         "TREEFORGE_BOOT_MANAGER_VERSION",
         "TREEFORGE_RUNTIME_ABI_VERSION",
+        "TREEFORGE_FRAMEBUFFER_VERSION",
+        "BUILD_DATE",
     }
 
     if set(result) != required:
@@ -76,9 +81,21 @@ def project_version() -> str:
     ]
 
 
+def boot_menu_version() -> str:
+    return _versions()[
+        "TREEFORGE_BOOT_MENU_VERSION"
+    ]
+
+
 def boot_manager_version() -> str:
     return _versions()[
         "TREEFORGE_BOOT_MANAGER_VERSION"
+    ]
+
+
+def framebuffer_version() -> str:
+    return _versions()[
+        "TREEFORGE_FRAMEBUFFER_VERSION"
     ]
 
 
@@ -86,6 +103,31 @@ def runtime_abi_version() -> str:
     return _versions()[
         "TREEFORGE_RUNTIME_ABI_VERSION"
     ]
+
+
+
+def build_date() -> str:
+    value = _versions()[
+        "BUILD_DATE"
+    ]
+
+    try:
+        parsed = date.fromisoformat(
+            value
+        )
+    except ValueError as error:
+        raise RuntimeError(
+            "invalid BUILD_DATE in VERSION: "
+            + repr(value)
+        ) from error
+
+    if parsed.isoformat() != value:
+        raise RuntimeError(
+            "BUILD_DATE must use YYYY-MM-DD: "
+            + repr(value)
+        )
+
+    return value
 
 
 def runtime_identity() -> str:
@@ -98,6 +140,9 @@ def runtime_identity() -> str:
 __all__ = (
     "VERSION_FILE",
     "boot_manager_version",
+    "build_date",
+    "boot_menu_version",
+    "framebuffer_version",
     "project_version",
     "runtime_abi_version",
     "runtime_identity",

@@ -111,6 +111,10 @@ def _run():
 
     owner_keys = _pixel_partitioner_owner_keys()
 
+    owner_signing = importlib.import_module(
+        "pixel_partitioner.owner_signing"
+    )
+
     root = (
         owner_keys
         .default_root()
@@ -147,6 +151,97 @@ def _run():
     password = getpass.getpass(
         "Owner AVB signing passphrase: "
     )
+
+    #
+    # TREEFORGE_BOOTSTRAP_AUTO_PP_OWNER_FAMILY
+    #
+    # A raw Pixel Partitioner backup is not yet rooted in
+    # the active Owner AVB identity.  Ask Pixel Partitioner,
+    # which owns that identity, to realize the canonical
+    # Owner family automatically before Bootstrap mutates it.
+    #
+    input_family = None
+    input_index = None
+    input_inline = False
+
+    for index, value in enumerate(sys.argv):
+        if value == "--input-family":
+            if index + 1 >= len(sys.argv):
+                raise RuntimeError(
+                    "--input-family requires a value"
+                )
+
+            input_family = Path(
+                sys.argv[index + 1]
+            ).expanduser().resolve()
+
+            input_index = index + 1
+            break
+
+        if value.startswith("--input-family="):
+            input_family = Path(
+                value.split("=", 1)[1]
+            ).expanduser().resolve()
+
+            input_index = index
+            input_inline = True
+            break
+
+    if (
+        input_family is not None
+        and (
+            input_family
+            / "source-manifest.json"
+        ).is_file()
+        and (
+            input_family
+            / "images"
+        ).is_dir()
+    ):
+        print()
+        print(
+            "[Owner AVB] Raw Pixel Partitioner "
+            "backup detected."
+        )
+        print(
+            "[Owner AVB] Realizing canonical "
+            "Owner family automatically..."
+        )
+
+        owner_family = (
+            owner_signing
+            .realize_canonical_owner_family(
+                backup_root=input_family,
+                key_root=root,
+                passphrase=password,
+            )
+        )
+
+        owner_family = (
+            Path(owner_family)
+            .expanduser()
+            .resolve()
+        )
+
+        print(
+            "[Owner AVB] Canonical Owner family: "
+            + str(owner_family)
+        )
+
+        if input_inline:
+            sys.argv[input_index] = (
+                "--input-family="
+                + str(owner_family)
+            )
+        else:
+            sys.argv[input_index] = str(
+                owner_family
+            )
+
+        print(
+            "PIXEL_PARTITIONER_OWNER_FAMILY=PASS"
+        )
+        print()
 
     with ExitStack() as stack:
         root_private, _ = stack.enter_context(

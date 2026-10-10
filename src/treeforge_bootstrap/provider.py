@@ -88,18 +88,18 @@ SUPPORTED_KERNEL_ABI = (
 
 EXPECTED_RUNTIME = {
     "initramfs.cpio": (
-            "e9d18d1e54585ad92e1477d2a6e7f34c"
-            "8f5540ff2354e38f5e0c7c6f08bf0201"
+            "d98b8447561330bccd8caf7ee4a4748c"
+            "9e56a18fc985efbe60f4bede8cdebc4a"
         ),
 
     "initramfs.lz4": (
-            "f2c78a649874e40483ab9a412470ca2e"
-            "44edfaf1f9b4a924da90620e54b5d412"
+            "0f2de3768b8f28d8ea74d0a64a7c194a"
+            "c4f8bc428ae859fc334bfa1d42c57ee7"
         ),
 
     "treeforge-menu": (
-            "7384702c4ecf5c47d1dc58a39e0ec187"
-            "b0a0339fe9cd65ff0e0d1ac016afd094"
+            "79384e134f8be1812a7cd0616073e8d9"
+            "d3d3fc201bfb943f84c2233f8def5fad"
         ),
 
 }
@@ -139,10 +139,14 @@ def _component_versions() -> dict[str, str]:
     required = {
         "bootstrap":
             "TREEFORGE_BOOTSTRAP_VERSION",
+        "boot_menu":
+            "TREEFORGE_BOOT_MENU_VERSION",
         "boot_manager":
             "TREEFORGE_BOOT_MANAGER_VERSION",
         "runtime_abi":
             "TREEFORGE_RUNTIME_ABI_VERSION",
+        "framebuffer":
+            "TREEFORGE_FRAMEBUFFER_VERSION",
     }
 
     result = {}
@@ -256,10 +260,14 @@ def _provider_metadata(
         "components": {
             "bootstrap":
                 versions["bootstrap"],
+            "boot_menu":
+                versions["boot_menu"],
             "boot_manager":
                 versions["boot_manager"],
             "runtime_abi":
                 versions["runtime_abi"],
+            "framebuffer":
+                versions["framebuffer"],
         },
         "signed_image":
             False,

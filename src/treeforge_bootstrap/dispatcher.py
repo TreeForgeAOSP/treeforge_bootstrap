@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
+from datetime import datetime, timezone
+
 from dataclasses import dataclass
 from pathlib import Path
-import os
 import shutil
 import struct
 import subprocess
@@ -10,6 +12,9 @@ import tomllib
 
 from .version import (
     boot_manager_version,
+    build_date as version_build_date,
+    boot_menu_version,
+    framebuffer_version,
     project_version,
     runtime_abi_version,
 )
@@ -225,6 +230,7 @@ int memcmp(
 #define SYS_MKNODAT 33
 #define SYS_MKDIRAT 34
 #define SYS_UNLINKAT 35
+#define SYS_RENAMEAT 38
 #ifndef SYS_SYMLINKAT
 #define SYS_SYMLINKAT 36
 #endif
@@ -1655,11 +1661,20 @@ static void tfb_fb_draw_text(
 static const char tfb_bootstrap_version[] =
     "__TREEFORGE_BOOTSTRAP_VERSION__";
 
+static const char tfb_boot_menu_version[] =
+    "__TREEFORGE_BOOT_MENU_VERSION__";
+
 static const char tfb_version[] =
     "__TREEFORGE_BOOT_MANAGER_VERSION__";
 
 static const char tfb_runtime_abi_version[] =
     "__TREEFORGE_RUNTIME_ABI_VERSION__";
+
+static const char tfb_framebuffer_version[] =
+    "__TREEFORGE_FRAMEBUFFER_VERSION__";
+
+static const char tfb_build_date[] =
+    "__TREEFORGE_BUILD_DATE__";
 
 
 #define TFB_ACTION_NONE 0
@@ -7843,6 +7858,209 @@ static void tfb_create_presence_marker(
             fd
         );
     }
+}
+
+
+
+#define TFB_RUNTIME_INVENTORY_PATH \
+    "/metadata/treeforge-bootstrap/runtime-inventory-v1.json"
+
+#define TFB_RUNTIME_INVENTORY_TEMP_PATH \
+    "/metadata/treeforge-bootstrap/.runtime-inventory-v1.json.tmp"
+
+
+static int tfb_publish_runtime_inventory(
+    void
+) {
+    /*
+     * TFB_RUNTIME_INVENTORY_V1
+     *
+     * This is public, non-secret installed-component identity.
+     * It is deliberately owned by Bootstrap rather than Pixel
+     * Partitioner state.
+     *
+     * Android FirstStageMain has mounted /metadata by the time this
+     * function is called. Failure remains non-fatal because inventory
+     * publication must never become a boot dependency.
+     */
+    tfb_syscall3(
+        SYS_MKDIRAT,
+        AT_FDCWD,
+        (long) "/metadata/treeforge-bootstrap",
+        0755
+    );
+
+    long fd = tfb_syscall4(
+        SYS_OPENAT,
+        AT_FDCWD,
+        (long) TFB_RUNTIME_INVENTORY_TEMP_PATH,
+        O_WRONLY
+            | O_CREAT
+            | O_TRUNC,
+        0644
+    );
+
+    if (fd < 0) {
+        return 0;
+    }
+
+    tfb_write_all(
+        fd,
+        "{\n"
+        "  \"schema\": 1,\n"
+        "  \"bootstrap\": {\n"
+        "    \"version\": \""
+    );
+
+    tfb_write_all(
+        fd,
+        tfb_bootstrap_version
+    );
+
+    tfb_write_all(
+        fd,
+        "\",\n"
+        "    \"build_date\": \""
+    );
+
+    tfb_write_all(
+        fd,
+        tfb_build_date
+    );
+
+    tfb_write_all(
+        fd,
+        "\"\n"
+        "  },\n"
+        "  \"boot_menu\": {\n"
+        "    \"version\": \""
+    );
+
+    tfb_write_all(
+        fd,
+        tfb_boot_menu_version
+    );
+
+    tfb_write_all(
+        fd,
+        "\",\n"
+        "    \"build_date\": \""
+    );
+
+    tfb_write_all(
+        fd,
+        tfb_build_date
+    );
+
+    tfb_write_all(
+        fd,
+        "\"\n"
+        "  },\n"
+        "  \"boot_manager\": {\n"
+        "    \"version\": \""
+    );
+
+    tfb_write_all(
+        fd,
+        tfb_version
+    );
+
+    tfb_write_all(
+        fd,
+        "\",\n"
+        "    \"build_date\": \""
+    );
+
+    tfb_write_all(
+        fd,
+        tfb_build_date
+    );
+
+    tfb_write_all(
+        fd,
+        "\"\n"
+        "  },\n"
+        "  \"runtime_abi\": {\n"
+        "    \"version\": \""
+    );
+
+    tfb_write_all(
+        fd,
+        tfb_runtime_abi_version
+    );
+
+    tfb_write_all(
+        fd,
+        "\",\n"
+        "    \"build_date\": \""
+    );
+
+    tfb_write_all(
+        fd,
+        tfb_build_date
+    );
+
+    tfb_write_all(
+        fd,
+        "\"\n"
+        "  },\n"
+        "  \"framebuffer\": {\n"
+        "    \"version\": \""
+    );
+
+    tfb_write_all(
+        fd,
+        tfb_framebuffer_version
+    );
+
+    tfb_write_all(
+        fd,
+        "\",\n"
+        "    \"abi\": 1,\n"
+        "    \"build_date\": \""
+    );
+
+    tfb_write_all(
+        fd,
+        tfb_build_date
+    );
+
+    tfb_write_all(
+        fd,
+        "\"\n"
+        "  }\n"
+        "}\n"
+    );
+
+    tfb_close(
+        fd
+    );
+
+    long renamed = tfb_syscall4(
+        SYS_RENAMEAT,
+        AT_FDCWD,
+        (long) TFB_RUNTIME_INVENTORY_TEMP_PATH,
+        AT_FDCWD,
+        (long) TFB_RUNTIME_INVENTORY_PATH
+    );
+
+    if (renamed < 0) {
+        tfb_syscall3(
+            SYS_UNLINKAT,
+            AT_FDCWD,
+            (long) TFB_RUNTIME_INVENTORY_TEMP_PATH,
+            0
+        );
+
+        return 0;
+    }
+
+    tfb_syscall1(
+        SYS_SYNC,
+        0
+    );
+
+    return 1;
 }
 
 
@@ -15543,6 +15761,18 @@ static void tfb_main(
 
         tfb_menu_load_runtime_state();
 
+        if (
+            tfb_publish_runtime_inventory()
+        ) {
+            tfb_log(
+                "runtime-inventory=published"
+            );
+        } else {
+            tfb_log(
+                "runtime-inventory=unavailable"
+            );
+        }
+
         /*
          * TFB_TOUCHSCREEN_MODULE_REALIZATION_V14
          *
@@ -16255,12 +16485,24 @@ void _start(void) {
             "__TREEFORGE_BOOTSTRAP_VERSION__"
         )
 
+        boot_menu_placeholder = (
+            "__TREEFORGE_BOOT_MENU_VERSION__"
+        )
+
         placeholder = (
             "__TREEFORGE_BOOT_MANAGER_VERSION__"
         )
 
         runtime_abi_placeholder = (
             "__TREEFORGE_RUNTIME_ABI_VERSION__"
+        )
+
+        framebuffer_placeholder = (
+            "__TREEFORGE_FRAMEBUFFER_VERSION__"
+        )
+
+        build_date_placeholder = (
+            "__TREEFORGE_BUILD_DATE__"
         )
 
         for (
@@ -16272,12 +16514,24 @@ void _start(void) {
                 "TreeForge Bootstrap",
             ),
             (
+                boot_menu_placeholder,
+                "TreeForge Boot Menu",
+            ),
+            (
                 placeholder,
                 "TreeForge Boot Manager",
             ),
             (
                 runtime_abi_placeholder,
                 "TreeForge Runtime ABI",
+            ),
+            (
+                framebuffer_placeholder,
+                "TreeForge Framebuffer",
+            ),
+            (
+                build_date_placeholder,
+                "TreeForge build date",
             ),
         ):
             if (
@@ -16306,11 +16560,44 @@ void _start(void) {
                 "placeholder is not unique"
             )
 
+        source_date_epoch = (
+            os.environ.get(
+                "SOURCE_DATE_EPOCH"
+            )
+        )
+
+        if source_date_epoch:
+            try:
+                build_timestamp = int(
+                    source_date_epoch
+                )
+            except ValueError as error:
+                raise TreeForgeDispatcherError(
+                    "invalid SOURCE_DATE_EPOCH"
+                ) from error
+
+            build_date = (
+                datetime.fromtimestamp(
+                    build_timestamp,
+                    tz=timezone.utc,
+                )
+                .strftime("%Y-%m-%d")
+            )
+        else:
+            build_date = (
+                version_build_date()
+            )
+
         generated_source = (
             cls._SOURCE
             .replace(
                 bootstrap_placeholder,
                 project_version(),
+                1,
+            )
+            .replace(
+                boot_menu_placeholder,
+                boot_menu_version(),
                 1,
             )
             .replace(
@@ -16321,6 +16608,16 @@ void _start(void) {
             .replace(
                 runtime_abi_placeholder,
                 runtime_abi_version(),
+                1,
+            )
+            .replace(
+                framebuffer_placeholder,
+                framebuffer_version(),
+                1,
+            )
+            .replace(
+                build_date_placeholder,
+                build_date,
                 1,
             )
             .replace(

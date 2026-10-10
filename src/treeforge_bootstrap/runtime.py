@@ -19,6 +19,10 @@ from .version import (
     runtime_identity,
 )
 from .paths import BUILD_PROFILE
+from .external_providers import (
+    ensure_external_provider,
+)
+
 from .paths import (
     INITRAMFS_ROOT,
     OUT,
@@ -79,7 +83,7 @@ RUNTIME_METADATA = (
 
 
 #
-# v1.0b6 hardware-candidate frozen runtime identities.
+# v1.0b7 host-verified candidate frozen runtime identities.
 #
 # These identify the exact payload published by the TreeForge Bootstrap
 # runtime provider. They intentionally do not require the canonical
@@ -87,26 +91,23 @@ RUNTIME_METADATA = (
 # verify_runtime().
 #
 FROZEN_RUNTIME_CPIO_SHA256 = (
-    "e9d18d1e54585ad92e1477d2a6e7f34c"
-    "8f5540ff2354e38f5e0c7c6f08bf0201"
+    "d98b8447561330bccd8caf7ee4a4748c"
+    "9e56a18fc985efbe60f4bede8cdebc4a"
 )
 
-FROZEN_RUNTIME_CPIO_BYTES = 15_587_160
-
+FROZEN_RUNTIME_CPIO_BYTES = 15_588_280
 FROZEN_RUNTIME_LZ4_SHA256 = (
-    "f2c78a649874e40483ab9a412470ca2e"
-    "44edfaf1f9b4a924da90620e54b5d412"
+    "0f2de3768b8f28d8ea74d0a64a7c194a"
+    "c4f8bc428ae859fc334bfa1d42c57ee7"
 )
 
-FROZEN_RUNTIME_LZ4_BYTES = 7_747_681
-
+FROZEN_RUNTIME_LZ4_BYTES = 7_748_153
 FROZEN_RUNTIME_MENU_SHA256 = (
-    "7384702c4ecf5c47d1dc58a39e0ec187"
-    "b0a0339fe9cd65ff0e0d1ac016afd094"
+    "79384e134f8be1812a7cd0616073e8d9"
+    "d3d3fc201bfb943f84c2233f8def5fad"
 )
 
-FROZEN_RUNTIME_MENU_BYTES = 10_227_137
-
+FROZEN_RUNTIME_MENU_BYTES = 10_228_257
 def _sha256(
     path: Path,
 ) -> str:
@@ -253,6 +254,10 @@ def _compile_adb_service(
 def _copy_external_provider(
     stage: Path,
 ) -> None:
+    ensure_external_provider(
+        "treeforge-bootstrap-adbd"
+    )
+
     if not ADBD_PROVIDER_ROOT.is_dir():
         raise TreeForgeBootstrapRuntimeError(
             "treeforge-bootstrap-adbd provider "

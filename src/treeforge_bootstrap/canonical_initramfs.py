@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import lzma
 import os
+import shutil
 
 from dataclasses import dataclass
 from dataclasses import replace
@@ -105,12 +106,181 @@ def _sha256_path(
     return digest.hexdigest()
 
 
-def _canonical_archive() -> NewcArchive:
-    if not CANONICAL_PROVIDER.is_file():
-        raise CanonicalInitramfsError(
-            "canonical Google init_boot CPIO "
-            f"is missing: {CANONICAL_PROVIDER}"
+
+def ensure_canonical_provider() -> Path:
+    """
+    Ensure Bootstrap's canonical Google init_boot CPIO exists.
+
+    The Google-derived payload remains deliberately untracked.
+    Bootstrap accepts an explicitly supplied local canonical source,
+    verifies it against the pinned byte identity, and materializes
+    those verified bytes into the ignored provider tree.
+
+    This is provenance-preserving materialization, not acquisition.
+    """
+
+    if CANONICAL_PROVIDER.is_file():
+        print(
+            "[canonical] VERIFY existing provider: "
+            f"{CANONICAL_PROVIDER}"
         )
+
+        identity = _sha256_path(
+            CANONICAL_PROVIDER
+        )
+
+        if identity != CANONICAL_SHA256:
+            raise CanonicalInitramfsError(
+                "canonical Google init_boot CPIO "
+                "identity changed: "
+                f"{identity}"
+            )
+
+        print(
+            "[canonical] VERIFY provider identity: PASS"
+        )
+
+        return CANONICAL_PROVIDER
+
+    print(
+        "[canonical] RESOLVE canonical Google "
+        "init_boot CPIO"
+    )
+
+    source_value = os.environ.get(
+        "TREEFORGE_BOOTSTRAP_CANONICAL_SOURCE"
+    )
+
+    if not source_value:
+        raise CanonicalInitramfsError(
+            "canonical Google init_boot CPIO is missing: "
+            f"{CANONICAL_PROVIDER}\n"
+            "Provide the verified BP1A canonical CPIO with:\n"
+            "  TREEFORGE_BOOTSTRAP_CANONICAL_SOURCE="
+            "/absolute/path/to/init_boot.ramdisk.cpio\n"
+            "Bootstrap will verify its SHA-256 before "
+            "materializing it."
+        )
+
+    source = (
+        Path(source_value)
+        .expanduser()
+        .resolve()
+    )
+
+    print(
+        "[canonical] SOURCE: "
+        f"{source}"
+    )
+
+    if not source.is_file():
+        raise CanonicalInitramfsError(
+            "canonical source does not exist: "
+            f"{source}"
+        )
+
+    identity = _sha256_path(
+        source
+    )
+
+    print(
+        "[canonical] SOURCE SHA256: "
+        f"{identity}"
+    )
+
+    if identity != CANONICAL_SHA256:
+        raise CanonicalInitramfsError(
+            "canonical source identity mismatch: "
+            f"{identity}; expected {CANONICAL_SHA256}"
+        )
+
+    print(
+        "[canonical] VERIFY source identity: PASS"
+    )
+
+    CANONICAL_PROVIDER.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    temporary = (
+        CANONICAL_PROVIDER.parent
+        / (
+            "."
+            + CANONICAL_PROVIDER.name
+            + ".tmp"
+        )
+    )
+
+    if temporary.exists():
+        temporary.unlink()
+
+    print(
+        "[canonical] MATERIALIZE: "
+        f"{CANONICAL_PROVIDER}"
+    )
+
+    with (
+        source.open("rb") as source_stream,
+        temporary.open("wb") as destination_stream,
+    ):
+        shutil.copyfileobj(
+            source_stream,
+            destination_stream,
+            length=1024 * 1024,
+        )
+
+        destination_stream.flush()
+        os.fsync(
+            destination_stream.fileno()
+        )
+
+    materialized_identity = _sha256_path(
+        temporary
+    )
+
+    if materialized_identity != CANONICAL_SHA256:
+        temporary.unlink(
+            missing_ok=True
+        )
+
+        raise CanonicalInitramfsError(
+            "materialized canonical provider "
+            "identity mismatch: "
+            f"{materialized_identity}"
+        )
+
+    temporary.replace(
+        CANONICAL_PROVIDER
+    )
+
+    directory_fd = os.open(
+        CANONICAL_PROVIDER.parent,
+        os.O_RDONLY,
+    )
+
+    try:
+        os.fsync(
+            directory_fd
+        )
+    finally:
+        os.close(
+            directory_fd
+        )
+
+    print(
+        "[canonical] MATERIALIZE: PASS"
+    )
+    print(
+        "[canonical] PROVIDER SHA256: "
+        f"{CANONICAL_SHA256}"
+    )
+
+    return CANONICAL_PROVIDER
+
+
+def _canonical_archive() -> NewcArchive:
+    ensure_canonical_provider()
 
     identity = _sha256_path(
         CANONICAL_PROVIDER
