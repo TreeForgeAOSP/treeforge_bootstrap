@@ -3,7 +3,7 @@
   "id": "treeforge-chromiumos",
   "device": "tangorpro",
   "kernel_profile": "treeforge-chromiumos",
-  "menu_profile": "profiles/treeforge-default.json",
+  "menu_provider": "treeforge_bootstrap_menu",
   "release_state": "development",
   "frozen_runtime": false
 }

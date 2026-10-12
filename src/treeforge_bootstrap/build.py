@@ -15,6 +15,10 @@ from .framebuffer_provider import (
     configure_framebuffer_provider_override,
     load_framebuffer_provider,
 )
+from .menu_provider import (
+    configure_menu_provider_override,
+    load_menu_provider,
+)
 
 from .paths import (
     OUT,
@@ -289,6 +293,17 @@ def main() -> None:
     )
 
     parser.add_argument(
+        "--menu-provider",
+        type=Path,
+        help=(
+            "Development-only local treeforge_bootstrap_menu provider root. "
+            "The default resolves the latest published compatible provider. "
+            "When supplied to image/realize-family, the CLI builds and verifies "
+            "a development runtime before image realization."
+        ),
+    )
+
+    parser.add_argument(
         "--profile",
         choices=("treeforge-default", "treeforge-chromiumos"),
         default=BUILD_PROFILE,
@@ -301,12 +316,13 @@ def main() -> None:
 
     development_runtime = (
         args.framebuffer_provider is not None
+        or args.menu_provider is not None
     )
 
     if development_runtime:
         if args.profile != "treeforge-default":
             parser.error(
-                "--framebuffer-provider currently supports "
+                "development provider overrides currently support "
                 "treeforge-default only"
             )
 
@@ -321,23 +337,35 @@ def main() -> None:
 
         if args.command not in allowed:
             parser.error(
-                "--framebuffer-provider is valid only for "
+                "development provider overrides are valid only for "
                 "doctor/build/verify/image/verify-image/realize-family"
             )
 
-        configure_framebuffer_provider_override(
-            args.framebuffer_provider
-        )
+        if args.framebuffer_provider is not None:
+            configure_framebuffer_provider_override(
+                args.framebuffer_provider
+            )
+            provider = load_framebuffer_provider()
+            print(
+                "FRAMEBUFFER_PROVIDER_MODE=development-local"
+            )
+            print(
+                "FRAMEBUFFER_PROVIDER_ROOT="
+                + str(provider.root)
+            )
 
-        provider = load_framebuffer_provider()
-
-        print(
-            "FRAMEBUFFER_PROVIDER_MODE=development-local"
-        )
-        print(
-            "FRAMEBUFFER_PROVIDER_ROOT="
-            + str(provider.root)
-        )
+        if args.menu_provider is not None:
+            configure_menu_provider_override(
+                args.menu_provider
+            )
+            provider = load_menu_provider()
+            print(
+                "MENU_PROVIDER_MODE=development-local"
+            )
+            print(
+                "MENU_PROVIDER_ROOT="
+                + str(provider.root)
+            )
 
     if args.profile == "treeforge-chromiumos":
         if args.command not in (

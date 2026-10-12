@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 from typing import Any
 
-from .paths import PROJECT_ROOT
+from .menu_provider import load_menu_provider
 
 
 class TreeForgeMenuError(ValueError):
@@ -114,13 +114,6 @@ class MenuProfile:
     schema: int
     profile_id: str
     root: MenuPage
-
-
-DEFAULT_PROFILE_PATH = (
-    PROJECT_ROOT
-    / "profiles"
-    / "treeforge-default.json"
-)
 
 
 _ID_PATTERN = re.compile(
@@ -825,5 +818,5 @@ def load_profile(
 
 def load_default_profile() -> MenuProfile:
     return load_profile(
-        DEFAULT_PROFILE_PATH
+        load_menu_provider().default_profile_path
     )

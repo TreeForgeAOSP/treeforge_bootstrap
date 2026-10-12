@@ -59,8 +59,6 @@ def _versions() -> dict[str, str]:
 
     required = {
         "TREEFORGE_BOOTSTRAP_VERSION",
-        "TREEFORGE_BOOT_MENU_VERSION",
-        "TREEFORGE_BOOT_MANAGER_VERSION",
         "TREEFORGE_RUNTIME_ABI_VERSION",
         "BUILD_DATE",
     }
@@ -77,18 +75,6 @@ def _versions() -> dict[str, str]:
 def project_version() -> str:
     return _versions()[
         "TREEFORGE_BOOTSTRAP_VERSION"
-    ]
-
-
-def boot_menu_version() -> str:
-    return _versions()[
-        "TREEFORGE_BOOT_MENU_VERSION"
-    ]
-
-
-def boot_manager_version() -> str:
-    return _versions()[
-        "TREEFORGE_BOOT_MANAGER_VERSION"
     ]
 
 
@@ -132,9 +118,7 @@ def runtime_identity() -> str:
 
 __all__ = (
     "VERSION_FILE",
-    "boot_manager_version",
     "build_date",
-    "boot_menu_version",
     "project_version",
     "runtime_abi_version",
     "runtime_identity",

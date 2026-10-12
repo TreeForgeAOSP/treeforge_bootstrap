@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .framebuffer_provider import load_framebuffer_provider
+from .menu_provider import load_menu_provider
 from .version import runtime_abi_version
 
 import hashlib
@@ -140,10 +141,6 @@ def _component_versions() -> dict[str, str]:
     required = {
         "bootstrap":
             "TREEFORGE_BOOTSTRAP_VERSION",
-        "boot_menu":
-            "TREEFORGE_BOOT_MENU_VERSION",
-        "boot_manager":
-            "TREEFORGE_BOOT_MANAGER_VERSION",
         "runtime_abi":
             "TREEFORGE_RUNTIME_ABI_VERSION",
     }
@@ -160,6 +157,9 @@ def _component_versions() -> dict[str, str]:
 
         result[name] = value
 
+    menu_provider = load_menu_provider()
+    result["boot_menu"] = menu_provider.version
+    result["boot_manager"] = menu_provider.boot_manager_version
     result["framebuffer"] = (
         load_framebuffer_provider().version
     )

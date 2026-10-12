@@ -147,10 +147,6 @@ def _payload_paths() -> list[Path]:
         Path("README.md"),
         Path("VERSION"),
         Path(
-            "profiles/"
-            "treeforge-default.json"
-        ),
-        Path(
             "provider-contract.json"
         ),
         Path("pyproject.toml"),

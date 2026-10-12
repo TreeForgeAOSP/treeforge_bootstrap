@@ -1,7 +1,7 @@
 /*
  * TreeForge Bootstrap permanent diagnostic PID 1.
  *
- * Bootstrap v1.0b3 diagnostic target.
+ * Bootstrap diagnostic target.
  *
  * Freestanding AArch64 userspace:
  *   - no libc

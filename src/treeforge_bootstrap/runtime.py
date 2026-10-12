@@ -83,7 +83,7 @@ RUNTIME_METADATA = (
 
 
 #
-# v1.0b7 host-verified candidate frozen runtime identities.
+# Host-verified candidate frozen runtime identities.
 #
 # These identify the exact payload published by the TreeForge Bootstrap
 # runtime provider. They intentionally do not require the canonical
