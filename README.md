@@ -1,112 +1,26 @@
-# TreeForge Bootstrap
+# TreeForge Bootstrap — v1.0b7
 
-TreeForge Bootstrap is the first-stage boot environment and boot manager for TreeForge-supported Android devices.
+First-stage boot environment and Boot Manager for TreeForge on Pixel Tablet (`tangorpro`).
 
-The current supported target is the Google Pixel Tablet (`tangorpro`) using Android 15.
-
-## Versions
-
-- TreeForge Bootstrap: `v1.0b5`
-- TreeForge Boot Manager: `v1.0b2`
-- TreeForge Runtime ABI: `v1.0b1`
-
-## Supported target
-
-| Component | Value |
-| --- | --- |
-| Device | Google Pixel Tablet |
-| Codename | `tangorpro` |
-| SoC | Google Tensor G2 / `gs201` |
-| Architecture | `arm64` |
-| Platform | Android 15 |
-
-## Building
-
-The default profile is `treeforge-default`.
-
-Check the host environment:
+## Build
 
 ```bash
-./treeforge-bootstrap \
-    --profile treeforge-default \
-    doctor
+./treeforge-bootstrap --profile treeforge-default doctor
+./treeforge-bootstrap --profile treeforge-default build
+./treeforge-bootstrap --profile treeforge-default verify
 ```
 
-Build and verify:
+Published component providers resolve through their owning repositories. Unreleased framebuffer work can be selected explicitly with `--framebuffer-provider PATH`.
 
-```bash
-./treeforge-bootstrap \
-    --profile treeforge-default \
-    build
+## Release
 
-./treeforge-bootstrap \
-    --profile treeforge-default \
-    verify
-```
+Bootstrap releases provider and realizer artifacts. Installation-specific signed images are reconstructed downstream with the existing Owner AVB identity.
 
-Verify the frozen release runtime:
+## Source
 
-```bash
-./treeforge-bootstrap \
-    --profile treeforge-default \
-    verify-frozen-runtime
-```
-
-Package and verify the runtime provider:
-
-```bash
-./treeforge-bootstrap \
-    --profile treeforge-default \
-    package
-
-./treeforge-bootstrap \
-    --profile treeforge-default \
-    verify-provider
-```
-
-Use `./treeforge-bootstrap --help` for the complete command-line interface.
-
-## Release artifacts
-
-TreeForge Bootstrap releases reusable provider artifacts rather than an installation-specific `init_boot.img`.
-
-The `v1.0b5` release provides:
-
-```text
-provider-contract.json
-SHA256SUMS
-
-treeforge-bootstrap-tangorpro-android15-runtime.tar.xz
-treeforge-bootstrap-tangorpro-android15-runtime.tar.xz.sha256
-
-treeforge-bootstrap-tangorpro-android15-runtime-update-manifest.json
-treeforge-bootstrap-tangorpro-android15-runtime-update-manifest.json.sha256
-
-treeforge-bootstrap-tangorpro-android15-realizer.tar.xz
-treeforge-bootstrap-tangorpro-android15-realizer.tar.xz.sha256
-```
-
-The update manifest provides the machine-readable Bootstrap update contract used by TreeForge Manager.
-
-## Kernel dependency
-
-Bootstrap `v1.0b5` uses TreeForge Kernel `r0.94-v1.0b2`.
-
-The matching kernel artifact is acquired and verified by the Bootstrap kernel provider.
-
-## Repository layout
-
-```text
-profiles/                   Bootstrap profiles
-runtime/initramfs/          early-userspace runtime
-src/treeforge_bootstrap/    Bootstrap implementation
-VERSION                     component versions
-provider-contract.json      provider/release contract
-treeforge-bootstrap         command-line entry point
-```
+- `VERSION` — Bootstrap-owned component versions
+- `profiles/` — build profiles
+- `runtime/initramfs/` — early userspace
+- `src/treeforge_bootstrap/` — build and realization tooling
 
 Generated output, caches, device images, and private signing material are not source.
-
-## Status
-
-TreeForge Bootstrap is beta software.

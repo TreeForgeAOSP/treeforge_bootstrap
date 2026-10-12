@@ -107,16 +107,94 @@ def _sha256_path(
 
 
 
+def _canonical_from_released_runtime(
+    runtime_cpio: Path,
+) -> NewcArchive:
+    runtime = read_newc_archive(
+        runtime_cpio
+    )
+
+    dispatcher_matches = [
+        entry
+        for entry in runtime.entries
+        if entry.name.lstrip("/") == "init"
+    ]
+
+    first_stage_matches = [
+        entry
+        for entry in runtime.entries
+        if entry.name.lstrip("/")
+        == FIRST_STAGE_INIT_NAME
+    ]
+
+    if len(dispatcher_matches) != 1:
+        raise CanonicalInitramfsError(
+            "released Bootstrap runtime must contain exactly one /init"
+        )
+
+    if len(first_stage_matches) != 1:
+        raise CanonicalInitramfsError(
+            "released Bootstrap runtime must contain exactly one "
+            + FIRST_STAGE_INIT_NAME
+        )
+
+    dispatcher_entry = dispatcher_matches[0]
+    first_stage_entry = first_stage_matches[0]
+    patched_init = first_stage_entry.data
+
+    if patched_init.count(TRANSITION_TARGET) != 1:
+        raise CanonicalInitramfsError(
+            "released Bootstrap first-stage copy has unexpected "
+            "FD99 transition count"
+        )
+
+    if patched_init.count(TRANSITION_SOURCE) != 0:
+        raise CanonicalInitramfsError(
+            "released Bootstrap first-stage copy still contains the "
+            "canonical second-stage transition"
+        )
+
+    canonical_init = patched_init.replace(
+        TRANSITION_TARGET,
+        TRANSITION_SOURCE,
+        1,
+    )
+
+    restored_init = replace(
+        dispatcher_entry,
+        data=canonical_init,
+    )
+
+    restored_entries = []
+
+    for entry in runtime.entries:
+        if entry is first_stage_entry:
+            continue
+
+        if entry is dispatcher_entry:
+            restored_entries.append(
+                restored_init
+            )
+            continue
+
+        restored_entries.append(entry)
+
+    return NewcArchive(
+        entries=tuple(restored_entries),
+        trailing_data=runtime.trailing_data,
+    )
+
+
 def ensure_canonical_provider() -> Path:
     """
     Ensure Bootstrap's canonical Google init_boot CPIO exists.
 
-    The Google-derived payload remains deliberately untracked.
-    Bootstrap accepts an explicitly supplied local canonical source,
-    verifies it against the pinned byte identity, and materializes
-    those verified bytes into the ignored provider tree.
+    The Google-derived seed remains deliberately untracked.  A fresh
+    checkout reconstructs the exact canonical bytes from the pinned
+    released Bootstrap runtime provider, then verifies the historical
+    canonical SHA-256 before materializing the ignored provider file.
 
-    This is provenance-preserving materialization, not acquisition.
+    No caller-supplied CPIO path is accepted.
     """
 
     if CANONICAL_PROVIDER.is_file():
@@ -144,58 +222,21 @@ def ensure_canonical_provider() -> Path:
 
     print(
         "[canonical] RESOLVE canonical Google "
-        "init_boot CPIO"
+        "init_boot CPIO from released Bootstrap provider"
     )
 
-    source_value = os.environ.get(
-        "TREEFORGE_BOOTSTRAP_CANONICAL_SOURCE"
+    from .released_runtime_provider import (
+        ensure_released_runtime_cpio,
     )
 
-    if not source_value:
-        raise CanonicalInitramfsError(
-            "canonical Google init_boot CPIO is missing: "
-            f"{CANONICAL_PROVIDER}\n"
-            "Provide the verified BP1A canonical CPIO with:\n"
-            "  TREEFORGE_BOOTSTRAP_CANONICAL_SOURCE="
-            "/absolute/path/to/init_boot.ramdisk.cpio\n"
-            "Bootstrap will verify its SHA-256 before "
-            "materializing it."
+    runtime_cpio = (
+        ensure_released_runtime_cpio()
+    )
+
+    restored = (
+        _canonical_from_released_runtime(
+            runtime_cpio
         )
-
-    source = (
-        Path(source_value)
-        .expanduser()
-        .resolve()
-    )
-
-    print(
-        "[canonical] SOURCE: "
-        f"{source}"
-    )
-
-    if not source.is_file():
-        raise CanonicalInitramfsError(
-            "canonical source does not exist: "
-            f"{source}"
-        )
-
-    identity = _sha256_path(
-        source
-    )
-
-    print(
-        "[canonical] SOURCE SHA256: "
-        f"{identity}"
-    )
-
-    if identity != CANONICAL_SHA256:
-        raise CanonicalInitramfsError(
-            "canonical source identity mismatch: "
-            f"{identity}; expected {CANONICAL_SHA256}"
-        )
-
-    print(
-        "[canonical] VERIFY source identity: PASS"
     )
 
     CANONICAL_PROVIDER.parent.mkdir(
@@ -208,35 +249,23 @@ def ensure_canonical_provider() -> Path:
         / (
             "."
             + CANONICAL_PROVIDER.name
-            + ".tmp"
+            + f".partial-{os.getpid()}"
         )
     )
 
-    if temporary.exists():
-        temporary.unlink()
-
-    print(
-        "[canonical] MATERIALIZE: "
-        f"{CANONICAL_PROVIDER}"
+    temporary.unlink(
+        missing_ok=True
     )
 
-    with (
-        source.open("rb") as source_stream,
-        temporary.open("wb") as destination_stream,
-    ):
-        shutil.copyfileobj(
-            source_stream,
-            destination_stream,
-            length=1024 * 1024,
-        )
+    write_newc_archive(
+        restored,
+        temporary,
+    )
 
-        destination_stream.flush()
-        os.fsync(
-            destination_stream.fileno()
+    materialized_identity = (
+        _sha256_path(
+            temporary
         )
-
-    materialized_identity = _sha256_path(
-        temporary
     )
 
     if materialized_identity != CANONICAL_SHA256:
@@ -245,9 +274,9 @@ def ensure_canonical_provider() -> Path:
         )
 
         raise CanonicalInitramfsError(
-            "materialized canonical provider "
-            "identity mismatch: "
-            f"{materialized_identity}"
+            "released runtime provider did not reconstruct the "
+            "pinned canonical Google init_boot CPIO: "
+            f"{materialized_identity} != {CANONICAL_SHA256}"
         )
 
     temporary.replace(
@@ -260,13 +289,9 @@ def ensure_canonical_provider() -> Path:
     )
 
     try:
-        os.fsync(
-            directory_fd
-        )
+        os.fsync(directory_fd)
     finally:
-        os.close(
-            directory_fd
-        )
+        os.close(directory_fd)
 
     print(
         "[canonical] MATERIALIZE: PASS"

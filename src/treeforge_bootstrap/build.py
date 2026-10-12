@@ -11,6 +11,11 @@ from .external_providers import (
     ensure_declared_external_providers,
 )
 
+from .framebuffer_provider import (
+    configure_framebuffer_provider_override,
+    load_framebuffer_provider,
+)
+
 from .paths import (
     OUT,
     PROVIDERS,
@@ -272,6 +277,18 @@ def main() -> None:
     )
 
     parser.add_argument(
+        "--framebuffer-provider",
+        type=Path,
+        help=(
+            "Development-only local treeforge_bootstrap_framebuffer "
+            "provider root. The default resolves the latest published "
+            "compatible provider. When supplied to image/realize-family, the CLI "
+            "builds and verifies a development runtime before image "
+            "realization."
+        ),
+    )
+
+    parser.add_argument(
         "--profile",
         choices=("treeforge-default", "treeforge-chromiumos"),
         default=BUILD_PROFILE,
@@ -281,6 +298,46 @@ def main() -> None:
 
     if args.profile != BUILD_PROFILE:
         parser.error("Build-profile mismatch")
+
+    development_runtime = (
+        args.framebuffer_provider is not None
+    )
+
+    if development_runtime:
+        if args.profile != "treeforge-default":
+            parser.error(
+                "--framebuffer-provider currently supports "
+                "treeforge-default only"
+            )
+
+        allowed = {
+            "doctor",
+            "build",
+            "verify",
+            "image",
+            "verify-image",
+            "realize-family",
+        }
+
+        if args.command not in allowed:
+            parser.error(
+                "--framebuffer-provider is valid only for "
+                "doctor/build/verify/image/verify-image/realize-family"
+            )
+
+        configure_framebuffer_provider_override(
+            args.framebuffer_provider
+        )
+
+        provider = load_framebuffer_provider()
+
+        print(
+            "FRAMEBUFFER_PROVIDER_MODE=development-local"
+        )
+        print(
+            "FRAMEBUFFER_PROVIDER_ROOT="
+            + str(provider.root)
+        )
 
     if args.profile == "treeforge-chromiumos":
         if args.command not in (
@@ -316,6 +373,10 @@ def main() -> None:
             from .chromiumos_init_boot import build
             build()
         else:
+            if development_runtime:
+                build_runtime()
+                verify_runtime()
+
             if (
                 args.avb_key is None
                 or args.source_init_boot is None
@@ -335,6 +396,9 @@ def main() -> None:
                 ),
                 signing_key=(
                     args.avb_key
+                ),
+                development_runtime=(
+                    development_runtime
                 ),
             )
     elif args.command == "verify-image":
@@ -362,6 +426,9 @@ def main() -> None:
                 signing_key=(
                     args.avb_key
                 ),
+                development_runtime=(
+                    development_runtime
+                ),
             )
     elif args.command == "realize-family":
         if args.input_family is None:
@@ -369,6 +436,10 @@ def main() -> None:
                 "realize-family requires "
                 "--input-family PATH"
             )
+
+        if development_runtime:
+            build_runtime()
+            verify_runtime()
 
         if (
             args.avb_keyset is not None
@@ -453,6 +524,9 @@ def main() -> None:
                 keyset.manifest_sha256
                 if keyset is not None
                 else None
+            ),
+            development_runtime=(
+                development_runtime
             ),
         )
     else:

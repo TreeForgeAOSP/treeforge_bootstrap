@@ -2157,6 +2157,7 @@ def realize_family(
     parent_vbmeta_key: Path | None = None,
     keyset_id: str | None = None,
     keyset_manifest_sha256: str | None = None,
+    development_runtime: bool = False,
 ) -> Path:
     (
         input_root,
@@ -2226,6 +2227,7 @@ def realize_family(
         require_parent_match=(
             parent_vbmeta_key is None
         ),
+        development_runtime=development_runtime,
     )
 
     verify_image(
@@ -2239,6 +2241,7 @@ def realize_family(
         require_parent_match=(
             parent_vbmeta_key is None
         ),
+        development_runtime=development_runtime,
     )
 
     #

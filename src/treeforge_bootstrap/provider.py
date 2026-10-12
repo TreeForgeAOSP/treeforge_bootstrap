@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .framebuffer_provider import load_framebuffer_provider
 from .version import runtime_abi_version
 
 import hashlib
@@ -145,8 +146,6 @@ def _component_versions() -> dict[str, str]:
             "TREEFORGE_BOOT_MANAGER_VERSION",
         "runtime_abi":
             "TREEFORGE_RUNTIME_ABI_VERSION",
-        "framebuffer":
-            "TREEFORGE_FRAMEBUFFER_VERSION",
     }
 
     result = {}
@@ -160,6 +159,10 @@ def _component_versions() -> dict[str, str]:
             )
 
         result[name] = value
+
+    result["framebuffer"] = (
+        load_framebuffer_provider().version
+    )
 
     return result
 

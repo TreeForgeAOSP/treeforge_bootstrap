@@ -24,7 +24,10 @@ from .paths import (
     WORK,
 )
 
-from .runtime import verify_frozen_runtime
+from .runtime import (
+    verify_frozen_runtime,
+    verify_runtime,
+)
 
 
 class TreeForgeBootstrapImageError(
@@ -162,8 +165,20 @@ def _validate_inputs(
     source_init_boot: Path | None,
     source_vbmeta: Path | None,
     signing_key: Path | None,
+    development_runtime: bool = False,
 ) -> tuple[Path, Path, Path]:
-    verify_frozen_runtime()
+    if development_runtime:
+        verify_runtime()
+        print(
+            "TREEFORGE_BOOTSTRAP_RUNTIME_POLICY="
+            "development-local-provider"
+        )
+    else:
+        verify_frozen_runtime()
+        print(
+            "TREEFORGE_BOOTSTRAP_RUNTIME_POLICY="
+            "frozen-release"
+        )
 
     if not RUNTIME_RAMDISK.is_file():
         raise TreeForgeBootstrapImageError(
@@ -919,6 +934,7 @@ def build_image(
     source_vbmeta: Path | None = None,
     signing_key: Path | None = None,
     require_parent_match: bool = True,
+    development_runtime: bool = False,
 ) -> Path:
     (
         resolved_source_init_boot,
@@ -928,6 +944,7 @@ def build_image(
         source_init_boot=source_init_boot,
         source_vbmeta=source_vbmeta,
         signing_key=signing_key,
+        development_runtime=development_runtime,
     )
 
     kernel = ensure_bootstrap_kernel()
@@ -1248,6 +1265,7 @@ def verify_image(
     source_vbmeta: Path | None = None,
     signing_key: Path | None = None,
     require_parent_match: bool = True,
+    development_runtime: bool = False,
 ) -> Path:
     (
         resolved_source_init_boot,
@@ -1257,6 +1275,7 @@ def verify_image(
         source_init_boot=source_init_boot,
         source_vbmeta=source_vbmeta,
         signing_key=signing_key,
+        development_runtime=development_runtime,
     )
 
     kernel = ensure_bootstrap_kernel()

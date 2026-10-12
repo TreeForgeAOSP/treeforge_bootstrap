@@ -18,7 +18,6 @@ from .version import (
     boot_manager_version,
     build_date as version_build_date,
     boot_menu_version,
-    framebuffer_version,
     project_version,
     runtime_abi_version,
 )
@@ -1303,7 +1302,7 @@ static const char tfb_runtime_abi_version[] =
     "__TREEFORGE_RUNTIME_ABI_VERSION__";
 
 static const char tfb_framebuffer_version[] =
-    "__TREEFORGE_FRAMEBUFFER_VERSION__";
+    "__TREEFORGE_FRAMEBUFFER_PROVIDER_VERSION__";
 
 static const char tfb_build_date[] =
     "__TREEFORGE_BUILD_DATE__";
@@ -2515,6 +2514,81 @@ static int tfb_ui_landscape_supported(
         && tfb_fb_menu_height
             == TFB_UI_LOGICAL_WIDTH
     );
+}
+
+
+static int tfb_ui_buffer_begin_region(
+    u32 x,
+    u32 y,
+    u32 width,
+    u32 height
+) {
+#ifndef TFB_FB_BUFFERED_PRESENT_AVAILABLE
+    (void) x;
+    (void) y;
+    (void) width;
+    (void) height;
+    return 0;
+#else
+    if (
+        !tfb_ui_landscape_supported()
+        || width == 0
+        || height == 0
+        || x >= TFB_UI_LOGICAL_WIDTH
+        || y >= TFB_UI_LOGICAL_HEIGHT
+    ) {
+        return 0;
+    }
+
+    if (width > TFB_UI_LOGICAL_WIDTH - x) {
+        width = TFB_UI_LOGICAL_WIDTH - x;
+    }
+
+    if (height > TFB_UI_LOGICAL_HEIGHT - y) {
+        height = TFB_UI_LOGICAL_HEIGHT - y;
+    }
+
+    u32 raw_x = y;
+    u32 raw_y = (
+        TFB_UI_LOGICAL_WIDTH
+        - x
+        - width
+    );
+
+    return tfb_fb_buffer_begin_region(
+        raw_x,
+        raw_y,
+        height,
+        width
+    );
+#endif
+}
+
+
+static int tfb_fb_buffer_begin_full(void) {
+#ifdef TFB_FB_BUFFERED_PRESENT_AVAILABLE
+    return tfb_fb_buffer_begin_region(
+        0,
+        0,
+        tfb_fb_menu_width,
+        tfb_fb_menu_height
+    );
+#else
+    return 0;
+#endif
+}
+
+
+static void tfb_ui_buffer_present_if(
+    int staged
+) {
+#ifdef TFB_FB_BUFFERED_PRESENT_AVAILABLE
+    if (staged) {
+        tfb_fb_buffer_present_region();
+    }
+#else
+    (void) staged;
+#endif
 }
 
 
@@ -6798,6 +6872,146 @@ static void tfb_fb_render_menu(
 }
 
 
+/*
+ * TFB_BUFFERED_MENU_PRESENT_V1
+ *
+ * Dirty-region decisions remain owned by the Boot Manager.  The
+ * framebuffer provider only stages the selected raw scanout region and
+ * publishes it after the logical redraw is complete.
+ */
+static void tfb_fb_render_selection_delta_buffered(
+    const struct tfb_menu_page *page,
+    int old_selected,
+    int new_selected
+) {
+    struct tfb_ui_menu_geometry geometry;
+    int staged = 0;
+
+    if (
+        tfb_ui_menu_geometry(page, &geometry)
+        && old_selected >= 0
+        && new_selected >= 0
+        && old_selected < geometry.item_count
+        && new_selected < geometry.item_count
+    ) {
+        u32 first = (u32) (
+            old_selected < new_selected
+                ? old_selected
+                : new_selected
+        );
+
+        u32 last = (u32) (
+            old_selected > new_selected
+                ? old_selected
+                : new_selected
+        );
+
+        u32 row_span = (
+            geometry.row_height
+            + geometry.row_gap
+        );
+
+        u32 region_y = (
+            geometry.y
+            + first * row_span
+        );
+
+        u32 region_height = (
+            (last - first) * row_span
+            + geometry.row_height
+        );
+
+        staged = tfb_ui_buffer_begin_region(
+            geometry.x,
+            region_y,
+            geometry.width,
+            region_height
+        );
+    }
+
+    tfb_fb_render_selection_delta(
+        page,
+        old_selected,
+        new_selected
+    );
+
+    tfb_ui_buffer_present_if(staged);
+}
+
+
+static void tfb_fb_render_status_region_buffered(
+    const struct tfb_menu_page *page,
+    u32 elapsed_ms,
+    int timeout_fired
+) {
+    struct tfb_ui_menu_geometry geometry;
+    int staged = 0;
+
+    if (tfb_ui_menu_geometry(page, &geometry)) {
+        staged = tfb_ui_buffer_begin_region(
+            geometry.x,
+            1468U,
+            geometry.width,
+            76U
+        );
+    }
+
+    tfb_fb_render_status_region(
+        page,
+        elapsed_ms,
+        timeout_fired
+    );
+
+    tfb_ui_buffer_present_if(staged);
+}
+
+
+static void tfb_fb_render_adb_region_buffered(void) {
+    int staged = tfb_ui_buffer_begin_region(
+        117U,
+        1280U,
+        266U,
+        66U
+    );
+
+    tfb_fb_render_adb_region();
+
+    tfb_ui_buffer_present_if(staged);
+}
+
+
+static void tfb_fb_refresh_pixel_partitioner_buffered(
+    const struct tfb_menu_page *page,
+    int selected
+) {
+    struct tfb_ui_menu_geometry geometry;
+    int staged = 0;
+
+    if (tfb_ui_menu_geometry(page, &geometry)) {
+        u32 bottom = (
+            TFB_PP_BACK_Y
+            + TFB_PP_BACK_HEIGHT
+        );
+
+        if (bottom > 315U) {
+            staged = tfb_ui_buffer_begin_region(
+                geometry.x,
+                315U,
+                geometry.width,
+                bottom - 315U
+            );
+        }
+    }
+
+    tfb_fb_refresh_pixel_partitioner(
+        page,
+        selected
+    );
+
+    tfb_ui_buffer_present_if(staged);
+}
+
+
 static void tfb_output(
     const char *value
 ) {
@@ -6934,6 +7148,25 @@ static void tfb_render(
         elapsed_ms,
         timeout_fired
     );
+}
+
+
+static void tfb_render_buffered(
+    const struct tfb_menu_page *page,
+    int selected,
+    u32 elapsed_ms,
+    int timeout_fired
+) {
+    int staged = tfb_fb_buffer_begin_full();
+
+    tfb_render(
+        page,
+        selected,
+        elapsed_ms,
+        timeout_fired
+    );
+
+    tfb_ui_buffer_present_if(staged);
 }
 
 
@@ -14259,7 +14492,7 @@ static void tfb_run_menu(void) {
         "early-menu begin"
     );
 
-    tfb_render(
+    tfb_render_buffered(
         page,
         selected,
         elapsed_ms,
@@ -14633,7 +14866,7 @@ static void tfb_run_menu(void) {
             redraw
             & TFB_REDRAW_FULL
         ) {
-            tfb_render(
+            tfb_render_buffered(
                 page,
                 selected,
                 elapsed_ms,
@@ -14650,7 +14883,7 @@ static void tfb_run_menu(void) {
                 redraw
                 & TFB_REDRAW_SELECTION
             ) {
-                tfb_fb_render_selection_delta(
+                tfb_fb_render_selection_delta_buffered(
                     page,
                     rendered_selected,
                     selected
@@ -14664,7 +14897,7 @@ static void tfb_run_menu(void) {
                 redraw
                 & TFB_REDRAW_STATUS
             ) {
-                tfb_fb_render_status_region(
+                tfb_fb_render_status_region_buffered(
                     page,
                     elapsed_ms,
                     (
@@ -14678,7 +14911,7 @@ static void tfb_run_menu(void) {
                 redraw
                 & TFB_REDRAW_ADB
             ) {
-                tfb_fb_render_adb_region();
+                tfb_fb_render_adb_region_buffered();
             }
         }
 
@@ -14704,7 +14937,7 @@ static void tfb_run_menu(void) {
                 pp_refresh_elapsed_ms
                 >= TFB_PP_REFRESH_MS
             ) {
-                tfb_fb_refresh_pixel_partitioner(
+                tfb_fb_refresh_pixel_partitioner_buffered(
                     page,
                     selected
                 );
@@ -15534,7 +15767,7 @@ void _start(void) {
         )
 
         framebuffer_placeholder = (
-            "__TREEFORGE_FRAMEBUFFER_VERSION__"
+            "__TREEFORGE_FRAMEBUFFER_PROVIDER_VERSION__"
         )
 
         build_date_placeholder = (
@@ -15681,7 +15914,7 @@ void _start(void) {
             )
             .replace(
                 framebuffer_placeholder,
-                framebuffer_version(),
+                framebuffer_provider.version,
                 1,
             )
             .replace(
