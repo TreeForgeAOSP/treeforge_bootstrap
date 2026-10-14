@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ROOT="$(
+    cd "$(dirname "${BASH_SOURCE[0]}")"
+    pwd
+)"
+
+MODE="${1:-prepare}"
+FORCE=0
+
+case "$MODE" in
+    prepare)
+        shift || true
+        ;;
+    *)
+        echo \
+            "Usage: ./release prepare [--force]" \
+            >&2
+        exit 2
+        ;;
+esac
+
+if [ "${1:-}" = "--force" ]; then
+    FORCE=1
+    shift
+fi
+
+if [ "$#" -ne 0 ]; then
+    echo \
+        "Usage: ./release prepare [--force]" \
+        >&2
+    exit 2
+fi
+
+PYTHONPATH="$ROOT/src" \
+python3 - "$FORCE" <<'PY'
+import sys
+
+from treeforge_bootstrap.development_provider import (
+    TreeForgeBootstrapDevelopmentProviderError,
+    prepare_release,
+)
+
+try:
+    prepare_release(
+        force=(
+            sys.argv[1]
+            == "1"
+        )
+    )
+except TreeForgeBootstrapDevelopmentProviderError as error:
+    print(
+        "ERROR: "
+        + str(error),
+        file=sys.stderr,
+    )
+
+    raise SystemExit(1)
+PY

@@ -279,6 +279,50 @@ int memcmp(
 #define TFB_EEXIST 17
 
 #define TREEFORGE_BOOTSTRAP_TRANSITION_FD 99
+
+/*
+ * TFB_VENDOR_BOOT_CARRIER_ABI_V1
+ *
+ * FD99 remains the established Bootstrap dispatcher/runtime
+ * transition descriptor.
+ *
+ * FD98 independently retains the TreeForge vendor_boot carrier
+ * across Android FirstStageMain / FreeRamdisk.
+ */
+#define TREEFORGE_BOOTSTRAP_VENDOR_BOOT_CARRIER_FD 98
+#define TFB_VENDOR_BOOT_CARRIER_PATH \
+    "/treeforge/bootstrap-carrier"
+#define TFB_VENDOR_BOOT_CARRIER_PROOF_PATH \
+    "/dev/treeforge-vendor-boot-carrier-proof"
+#define TFB_VENDOR_BOOT_CARRIER_REQUEST_PATH \
+    "/dev/treeforge-bootstrap-transaction-v1.request"
+
+/*
+ * TreeForge Bootstrap retained carrier ABI v1.
+ *
+ * Host format:
+ *
+ *   96-byte header
+ *   128-byte fixed records
+ *   raw payload area
+ *
+ * Production accepts:
+ *
+ *   proof/retained-fd
+ *
+ * or the strictly sorted pair:
+ *
+ *   proof/retained-fd
+ *   transaction/request-v1
+ *
+ * FD98 still retains one carrier inode across FreeRamdisk.
+ */
+#define TFB_VENDOR_BOOT_CARRIER_HEADER_BYTES 96
+#define TFB_VENDOR_BOOT_CARRIER_RECORD_BYTES 128
+#define TFB_VENDOR_BOOT_CARRIER_SCHEMA 1
+#define TFB_VENDOR_BOOT_CARRIER_ENTRY_FILE 1
+#define TFB_VENDOR_BOOT_CARRIER_PROOF_BYTES 43
+#define TFB_VENDOR_BOOT_CARRIER_REQUEST_BYTES 119
 #define PROT_READ 1
 #define PROT_WRITE 2
 
@@ -7905,6 +7949,621 @@ static void tfb_pixel_partitioner_service(
 }
 
 
+/*
+ * TFB_VENDOR_BOOT_CARRIER_ABI_V1
+ *
+ * FD98 is a sequential retained carrier descriptor.  All header,
+ * record, and payload bytes are consumed from that one descriptor
+ * after Android FirstStageMain / FreeRamdisk.
+ */
+static int tfb_carrier_read_exact(
+    unsigned char *buffer,
+    long size
+) {
+    long offset = 0;
+
+    while (offset < size) {
+        long amount = tfb_syscall3(
+            SYS_READ,
+            TREEFORGE_BOOTSTRAP_VENDOR_BOOT_CARRIER_FD,
+            (long) (
+                buffer + offset
+            ),
+            size - offset
+        );
+
+        if (amount <= 0) {
+            return 0;
+        }
+
+        offset += amount;
+    }
+
+    return 1;
+}
+
+
+static unsigned int tfb_carrier_le32(
+    const unsigned char *value
+) {
+    return (
+        ((unsigned int) value[0])
+        | (
+            ((unsigned int) value[1])
+            << 8
+        )
+        | (
+            ((unsigned int) value[2])
+            << 16
+        )
+        | (
+            ((unsigned int) value[3])
+            << 24
+        )
+    );
+}
+
+
+static unsigned long long tfb_carrier_le64(
+    const unsigned char *value
+) {
+    unsigned long long result = 0;
+    int index;
+
+    for (index = 7; index >= 0; index--) {
+        result <<= 8;
+        result |= (
+            (unsigned long long)
+            value[index]
+        );
+    }
+
+    return result;
+}
+
+
+static int tfb_carrier_all_zero(
+    const unsigned char *value,
+    long size
+) {
+    long index;
+
+    for (index = 0; index < size; index++) {
+        if (value[index] != 0) {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+
+static int tfb_carrier_magic_matches(
+    const unsigned char *header
+) {
+    static const unsigned char magic[8] = {
+        'T', 'F', 'B', 'C',
+        'A', 'R', '0', '1'
+    };
+
+    int index;
+
+    for (index = 0; index < 8; index++) {
+        if (header[index] != magic[index]) {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+
+static int tfb_carrier_name_matches(
+    const unsigned char *record,
+    const unsigned char *name,
+    long name_bytes
+) {
+    if (
+        !record
+        || !name
+        || name_bytes <= 0
+        || name_bytes >= 64
+    ) {
+        return 0;
+    }
+
+    long index;
+
+    for (index = 0; index < name_bytes; index++) {
+        if (record[index] != name[index]) {
+            return 0;
+        }
+    }
+
+    if (record[name_bytes] != 0) {
+        return 0;
+    }
+
+    return tfb_carrier_all_zero(
+        record + name_bytes + 1,
+        64 - name_bytes - 1
+    );
+}
+
+
+static int tfb_carrier_proof_name_matches(
+    const unsigned char *record
+) {
+    static const unsigned char name[] =
+        "proof/retained-fd";
+
+    return tfb_carrier_name_matches(
+        record,
+        name,
+        (long) sizeof(name) - 1
+    );
+}
+
+
+static int tfb_carrier_request_name_matches(
+    const unsigned char *record
+) {
+    static const unsigned char name[] =
+        "transaction/request-v1";
+
+    return tfb_carrier_name_matches(
+        record,
+        name,
+        (long) sizeof(name) - 1
+    );
+}
+
+
+static int tfb_carrier_record_matches(
+    const unsigned char *record,
+    const unsigned char *name,
+    long name_bytes,
+    unsigned int expected_mode,
+    unsigned long long expected_offset,
+    unsigned long long expected_bytes
+) {
+    if (
+        !tfb_carrier_name_matches(
+            record,
+            name,
+            name_bytes
+        )
+        || tfb_carrier_le32(
+            record + 64
+        )
+            != TFB_VENDOR_BOOT_CARRIER_ENTRY_FILE
+        || tfb_carrier_le32(
+            record + 68
+        )
+            != expected_mode
+        || tfb_carrier_le64(
+            record + 72
+        )
+            != expected_offset
+        || tfb_carrier_le64(
+            record + 80
+        )
+            != expected_bytes
+        || !tfb_carrier_all_zero(
+            record + 120,
+            8
+        )
+    ) {
+        return 0;
+    }
+
+    return 1;
+}
+
+
+static int tfb_carrier_transaction_request_valid(
+    const unsigned char *request
+) {
+    static const unsigned char prefix[] =
+        "TREEFORGE_BOOTSTRAP_TRANSACTION_V1\nid=";
+
+    static const unsigned char suffix[] =
+        "\noperation=proof\n";
+
+    long prefix_bytes = (
+        (long) sizeof(prefix)
+        - 1
+    );
+
+    long suffix_bytes = (
+        (long) sizeof(suffix)
+        - 1
+    );
+
+    if (
+        TFB_VENDOR_BOOT_CARRIER_REQUEST_BYTES
+        != (
+            prefix_bytes
+            + 64
+            + suffix_bytes
+        )
+    ) {
+        return 0;
+    }
+
+    long index;
+
+    for (index = 0; index < prefix_bytes; index++) {
+        if (request[index] != prefix[index]) {
+            return 0;
+        }
+    }
+
+    for (index = 0; index < 64; index++) {
+        unsigned char value =
+            request[
+                prefix_bytes
+                + index
+            ];
+
+        if (
+            !(
+                (
+                    value >= '0'
+                    && value <= '9'
+                )
+                || (
+                    value >= 'a'
+                    && value <= 'f'
+                )
+            )
+        ) {
+            return 0;
+        }
+    }
+
+    long suffix_offset =
+        prefix_bytes
+        + 64;
+
+    for (index = 0; index < suffix_bytes; index++) {
+        if (
+            request[
+                suffix_offset
+                + index
+            ]
+            != suffix[index]
+        ) {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+
+static int tfb_carrier_publish_file(
+    const char *path,
+    const unsigned char *payload,
+    long payload_bytes
+) {
+    long output = tfb_syscall4(
+        SYS_OPENAT,
+        AT_FDCWD,
+        (long) path,
+        (
+            O_WRONLY
+            | O_CREAT
+            | O_TRUNC
+        ),
+        0644
+    );
+
+    if (output < 0) {
+        return 0;
+    }
+
+    long offset = 0;
+
+    while (offset < payload_bytes) {
+        long written = tfb_syscall3(
+            SYS_WRITE,
+            output,
+            (long) (
+                payload
+                + offset
+            ),
+            payload_bytes
+                - offset
+        );
+
+        if (written <= 0) {
+            tfb_close(
+                output
+            );
+
+            return 0;
+        }
+
+        offset += written;
+    }
+
+    tfb_close(
+        output
+    );
+
+    return 1;
+}
+
+
+/*
+ * TFB_VENDOR_BOOT_CARRIER_ABI_V1
+ *
+ * FD98 refers to /treeforge/bootstrap-carrier opened by initial
+ * Bootstrap PID1 before Android FirstStageMain tears down the
+ * original ramdisk namespace.
+ *
+ * Validate the first production carrier container structurally:
+ *
+ *   magic           TFBCAR01
+ *   schema          1
+ *   header bytes    96
+ *   record bytes    128
+ *   entries         1
+ *   table offset    96
+ *   payload offset  224
+ *
+ * Then locate the single proof/retained-fd record, require its
+ * canonical layout and publish its exact 43-byte payload into /dev.
+ *
+ * The complete vendor_boot image is already authenticated by the
+ * Owner AVB graph. SHA-256 validation of the container table and
+ * entry payload remains a separate dispatcher hardening step.
+ */
+static int tfb_publish_vendor_boot_carrier_proof(
+    void
+) {
+    unsigned char header[
+        TFB_VENDOR_BOOT_CARRIER_HEADER_BYTES
+    ];
+
+    unsigned char records[
+        2
+    ][
+        TFB_VENDOR_BOOT_CARRIER_RECORD_BYTES
+    ];
+
+    unsigned char proof[
+        TFB_VENDOR_BOOT_CARRIER_PROOF_BYTES
+    ];
+
+    unsigned char request[
+        TFB_VENDOR_BOOT_CARRIER_REQUEST_BYTES
+    ];
+
+    unsigned char trailing;
+
+    if (
+        !tfb_carrier_read_exact(
+            header,
+            TFB_VENDOR_BOOT_CARRIER_HEADER_BYTES
+        )
+    ) {
+        return 0;
+    }
+
+    if (
+        !tfb_carrier_magic_matches(
+            header
+        )
+    ) {
+        return 0;
+    }
+
+    unsigned int schema =
+        tfb_carrier_le32(
+            header + 8
+        );
+
+    unsigned int header_bytes =
+        tfb_carrier_le32(
+            header + 12
+        );
+
+    unsigned int record_bytes =
+        tfb_carrier_le32(
+            header + 16
+        );
+
+    unsigned int entry_count =
+        tfb_carrier_le32(
+            header + 20
+        );
+
+    unsigned long long table_offset =
+        tfb_carrier_le64(
+            header + 24
+        );
+
+    unsigned long long payload_offset =
+        tfb_carrier_le64(
+            header + 32
+        );
+
+    unsigned long long total_bytes =
+        tfb_carrier_le64(
+            header + 40
+        );
+
+    if (
+        schema
+            != TFB_VENDOR_BOOT_CARRIER_SCHEMA
+        || header_bytes
+            != TFB_VENDOR_BOOT_CARRIER_HEADER_BYTES
+        || record_bytes
+            != TFB_VENDOR_BOOT_CARRIER_RECORD_BYTES
+        || (
+            entry_count != 1
+            && entry_count != 2
+        )
+        || table_offset
+            != TFB_VENDOR_BOOT_CARRIER_HEADER_BYTES
+        || payload_offset
+            != (
+                TFB_VENDOR_BOOT_CARRIER_HEADER_BYTES
+                + (
+                    (
+                        unsigned long long
+                    ) entry_count
+                    * TFB_VENDOR_BOOT_CARRIER_RECORD_BYTES
+                )
+            )
+        || !tfb_carrier_all_zero(
+            header + 80,
+            16
+        )
+    ) {
+        return 0;
+    }
+
+    unsigned int index;
+
+    for (
+        index = 0;
+        index < entry_count;
+        index++
+    ) {
+        if (
+            !tfb_carrier_read_exact(
+                records[index],
+                TFB_VENDOR_BOOT_CARRIER_RECORD_BYTES
+            )
+        ) {
+            return 0;
+        }
+    }
+
+    static const unsigned char proof_name[] =
+        "proof/retained-fd";
+
+    if (
+        !tfb_carrier_record_matches(
+            records[0],
+            proof_name,
+            (long) sizeof(proof_name) - 1,
+            0444,
+            payload_offset,
+            TFB_VENDOR_BOOT_CARRIER_PROOF_BYTES
+        )
+    ) {
+        return 0;
+    }
+
+    int request_present = (
+        entry_count == 2
+    );
+
+    unsigned long long request_offset = (
+        payload_offset
+        + TFB_VENDOR_BOOT_CARRIER_PROOF_BYTES
+    );
+
+    if (request_present) {
+        static const unsigned char request_name[] =
+            "transaction/request-v1";
+
+        if (
+            !tfb_carrier_record_matches(
+                records[1],
+                request_name,
+                (long) sizeof(request_name) - 1,
+                0644,
+                request_offset,
+                TFB_VENDOR_BOOT_CARRIER_REQUEST_BYTES
+            )
+        ) {
+            return 0;
+        }
+    }
+
+    unsigned long long expected_total = (
+        payload_offset
+        + TFB_VENDOR_BOOT_CARRIER_PROOF_BYTES
+    );
+
+    if (request_present) {
+        expected_total += (
+            TFB_VENDOR_BOOT_CARRIER_REQUEST_BYTES
+        );
+    }
+
+    if (total_bytes != expected_total) {
+        return 0;
+    }
+
+    if (
+        !tfb_carrier_read_exact(
+            proof,
+            TFB_VENDOR_BOOT_CARRIER_PROOF_BYTES
+        )
+    ) {
+        return 0;
+    }
+
+    if (request_present) {
+        if (
+            !tfb_carrier_read_exact(
+                request,
+                TFB_VENDOR_BOOT_CARRIER_REQUEST_BYTES
+            )
+            || !tfb_carrier_transaction_request_valid(
+                request
+            )
+        ) {
+            return 0;
+        }
+    }
+
+    /*
+     * Exact total length: after consuming all declared payloads
+     * there must be no additional byte in the retained carrier.
+     */
+    long extra = tfb_syscall3(
+        SYS_READ,
+        TREEFORGE_BOOTSTRAP_VENDOR_BOOT_CARRIER_FD,
+        (long) &trailing,
+        1
+    );
+
+    if (extra != 0) {
+        return 0;
+    }
+
+    if (
+        !tfb_carrier_publish_file(
+            TFB_VENDOR_BOOT_CARRIER_PROOF_PATH,
+            proof,
+            TFB_VENDOR_BOOT_CARRIER_PROOF_BYTES
+        )
+    ) {
+        return 0;
+    }
+
+    if (
+        request_present
+        && !tfb_carrier_publish_file(
+            TFB_VENDOR_BOOT_CARRIER_REQUEST_PATH,
+            request,
+            TFB_VENDOR_BOOT_CARRIER_REQUEST_BYTES
+        )
+    ) {
+        return 0;
+    }
+
+    return 1;
+}
+
+
 __TREEFORGE_MENU_CONTROLLER_SOURCE__static void tfb_main(
     long argc,
     char **argv,
@@ -7947,6 +8606,23 @@ __TREEFORGE_MENU_CONTROLLER_SOURCE__static void tfb_main(
             O_WRONLY
             | O_NONBLOCK
         );
+
+        int vendor_boot_carrier_proof =
+            tfb_publish_vendor_boot_carrier_proof();
+
+        tfb_close(
+            TREEFORGE_BOOTSTRAP_VENDOR_BOOT_CARRIER_FD
+        );
+
+        if (vendor_boot_carrier_proof) {
+            tfb_log(
+                "vendor-boot-carrier-proof=pass"
+            );
+        } else {
+            tfb_log(
+                "vendor-boot-carrier-proof=failed"
+            );
+        }
 
         if (
             !tfb_materialize_runtime_bundle()
@@ -8015,9 +8691,11 @@ __TREEFORGE_MENU_CONTROLLER_SOURCE__static void tfb_main(
     /*
      * Initial invocation from the kernel.
      *
-     * FD99 is the only retained descriptor. It carries this dispatcher
-     * and the appended TreeForge Bootstrap runtime bundle through Google's
-     * currently proven FirstStageMain boundary.
+     * FD99 carries this dispatcher and the appended TreeForge Bootstrap
+     * runtime bundle through Google's proven FirstStageMain boundary.
+     *
+     * FD98 independently carries the vendor_boot carrier so its open
+     * file description survives FreeRamdisk.
      */
     long self_fd = tfb_open(
         "/init",
@@ -8053,6 +8731,51 @@ __TREEFORGE_MENU_CONTROLLER_SOURCE__static void tfb_main(
 
         tfb_close(
             self_fd
+        );
+    }
+
+    /*
+     * TFB_VENDOR_BOOT_CARRIER_ABI_V1
+     *
+     * Open the vendor_boot carrier while the original ramdisk
+     * namespace is still visible, then retain its file description
+     * independently on FD98.
+     */
+    long vendor_boot_carrier_fd = tfb_open(
+        TFB_VENDOR_BOOT_CARRIER_PATH,
+        O_RDONLY
+    );
+
+    if (vendor_boot_carrier_fd < 0) {
+        tfb_transition_failure(
+            "vendor-boot-carrier-open"
+        );
+    }
+
+    if (
+        vendor_boot_carrier_fd
+        != TREEFORGE_BOOTSTRAP_VENDOR_BOOT_CARRIER_FD
+    ) {
+        long carrier_duplicated =
+            tfb_syscall3(
+                SYS_DUP3,
+                vendor_boot_carrier_fd,
+                TREEFORGE_BOOTSTRAP_VENDOR_BOOT_CARRIER_FD,
+                0
+            );
+
+        if (carrier_duplicated < 0) {
+            tfb_close(
+                vendor_boot_carrier_fd
+            );
+
+            tfb_transition_failure(
+                "vendor-boot-carrier-fd-duplicate"
+            );
+        }
+
+        tfb_close(
+            vendor_boot_carrier_fd
         );
     }
 

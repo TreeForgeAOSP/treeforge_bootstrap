@@ -4,23 +4,22 @@ First-stage boot environment for TreeForge on Pixel Tablet (`tangorpro`).
 
 ## Build
 
-```bash
-./treeforge-bootstrap --profile treeforge-default doctor
-./treeforge-bootstrap --profile treeforge-default build
-./treeforge-bootstrap --profile treeforge-default verify
-```
+    ./treeforge-bootstrap --profile treeforge-default build
 
-Published component providers resolve through their owning repositories. Unreleased work can be selected explicitly with `--framebuffer-provider PATH` or `--menu-provider PATH`.
+Successful default builds publish `out/development-provider/current` and retain the newest five successful runs.
+
+Kernel, Framebuffer, and Menu development providers use the corresponding `--dev-provider-* [PATH]` arguments.
+
+## Verify
+
+    ./treeforge-bootstrap --profile treeforge-default verify
 
 ## Release
 
-Bootstrap releases provider and realizer artifacts. Installation-specific signed images are reconstructed downstream with the existing Owner AVB identity.
+    ./release prepare
 
-## Source
+Release promotes the exact clean runtime and realizer from `out/development-provider/current` into `out/releases/<version>/assets`. It generates release metadata but does not rebuild either artifact.
 
-- `VERSION` — Bootstrap-owned version and runtime ABI
-- `profiles/` — build profiles
-- `runtime/initramfs/` — early userspace
-- `src/treeforge_bootstrap/` — build and realization tooling
+Installation-specific signed images are reconstructed downstream with the existing Owner AVB identity.
 
-Generated output, caches, device images, and private signing material are not source.
+`VERSION` is authoritative.

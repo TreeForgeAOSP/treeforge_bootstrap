@@ -13,6 +13,9 @@ import tarfile
 from .paths import OUT
 from .runtime import (
     COMPRESSED_INITRAMFS,
+    FROZEN_RUNTIME_CPIO_SHA256,
+    FROZEN_RUNTIME_LZ4_SHA256,
+    FROZEN_RUNTIME_MENU_SHA256,
     MENU_BINARY,
     RAW_INITRAMFS,
     verify_runtime,
@@ -89,21 +92,14 @@ SUPPORTED_KERNEL_ABI = (
 )
 
 EXPECTED_RUNTIME = {
-    "initramfs.cpio": (
-            "d98b8447561330bccd8caf7ee4a4748c"
-            "9e56a18fc985efbe60f4bede8cdebc4a"
-        ),
+    "initramfs.cpio":
+        FROZEN_RUNTIME_CPIO_SHA256,
 
-    "initramfs.lz4": (
-            "0f2de3768b8f28d8ea74d0a64a7c194a"
-            "c4f8bc428ae859fc334bfa1d42c57ee7"
-        ),
+    "initramfs.lz4":
+        FROZEN_RUNTIME_LZ4_SHA256,
 
-    "treeforge-menu": (
-            "79384e134f8be1812a7cd0616073e8d9"
-            "d3d3fc201bfb943f84c2233f8def5fad"
-        ),
-
+    "treeforge-menu":
+        FROZEN_RUNTIME_MENU_SHA256,
 }
 
 
@@ -312,14 +308,24 @@ def _provider_metadata(
     )
 
 
-def _manager_update_metadata() -> bytes:
-    if not PROVIDER_ARCHIVE.is_file():
+def _manager_update_metadata(
+    provider_archive: Path = PROVIDER_ARCHIVE,
+    release: str | None = None,
+) -> bytes:
+    if not provider_archive.is_file():
         raise TreeForgeBootstrapProviderError(
             "runtime provider must be packaged before "
             "the Manager update manifest"
         )
 
-    versions = _component_versions()
+    release_version = release
+
+    if release_version is None:
+        release_version = (
+            _component_versions()[
+                "bootstrap"
+            ]
+        )
 
     metadata = {
         "schema":
@@ -329,7 +335,7 @@ def _manager_update_metadata() -> bytes:
             "bootstrap",
 
         "release":
-            versions["bootstrap"],
+            release_version,
 
         "device":
             "tangorpro",
@@ -358,18 +364,18 @@ def _manager_update_metadata() -> bytes:
         "artifacts": {
             "runtime": {
                 "filename":
-                    PROVIDER_ARCHIVE.name,
+                    provider_archive.name,
 
                 "sha256":
                     _sha256_path(
-                        PROVIDER_ARCHIVE
+                        provider_archive
                     ),
 
                 "identity_scope":
                     "release-download",
 
                 "bytes":
-                    PROVIDER_ARCHIVE.stat().st_size,
+                    provider_archive.stat().st_size,
 
                 "redistribution":
                     "public",

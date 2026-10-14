@@ -119,6 +119,323 @@ KERNEL_CACHE_MODULE_ARCHIVE = (
 )
 
 
+_KERNEL_PROVIDER_OVERRIDE: Path | None = None
+
+
+def _verify_development_checksums(
+    root: Path,
+) -> None:
+    sums = root / "SHA256SUMS"
+
+    if not sums.is_file():
+        raise TreeForgeBootstrapKernelProviderError(
+            "kernel development provider "
+            "SHA256SUMS missing"
+        )
+
+    seen: set[str] = set()
+
+    for raw in sums.read_text(
+        encoding="utf-8"
+    ).splitlines():
+        if not raw.strip():
+            continue
+
+        try:
+            digest, relative = raw.split(
+                "  ",
+                1,
+            )
+        except ValueError as error:
+            raise TreeForgeBootstrapKernelProviderError(
+                "invalid kernel development "
+                "provider checksum line"
+            ) from error
+
+        if relative in seen:
+            raise TreeForgeBootstrapKernelProviderError(
+                "duplicate kernel development "
+                f"provider checksum: {relative}"
+            )
+
+        seen.add(relative)
+
+        target = root / relative
+
+        if not target.is_file():
+            raise TreeForgeBootstrapKernelProviderError(
+                "kernel development provider "
+                f"asset missing: {relative}"
+            )
+
+        if sha256(target) != digest:
+            raise TreeForgeBootstrapKernelProviderError(
+                "kernel development provider "
+                f"checksum mismatch: {relative}"
+            )
+
+    required = {
+        "boot.img",
+        "module-provider.json",
+    }
+
+    if not required.issubset(seen):
+        raise TreeForgeBootstrapKernelProviderError(
+            "kernel development provider "
+            "checksum membership incomplete"
+        )
+
+
+def _development_android_archive(
+    root: Path,
+) -> Path:
+    matches = sorted(
+        root.glob(
+            "treeforge-kernel-modules-"
+            "*.tar.zst"
+        )
+    )
+
+    if len(matches) != 1:
+        raise TreeForgeBootstrapKernelProviderError(
+            "kernel development provider "
+            "must contain exactly one Android "
+            "module archive"
+        )
+
+    return matches[0]
+
+
+def _verify_development_provider_contract(
+    root: Path,
+) -> dict[str, object]:
+    development_path = (
+        root
+        / "development-provider.json"
+    )
+
+    module_path = (
+        root
+        / "module-provider.json"
+    )
+
+    if not development_path.is_file():
+        raise TreeForgeBootstrapKernelProviderError(
+            "kernel development-provider.json "
+            f"missing: {root}"
+        )
+
+    try:
+        development = json.loads(
+            development_path.read_text(
+                encoding="utf-8"
+            )
+        )
+
+        metadata = json.loads(
+            module_path.read_text(
+                encoding="utf-8"
+            )
+        )
+    except (
+        OSError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+    ) as error:
+        raise TreeForgeBootstrapKernelProviderError(
+            "kernel development provider "
+            "metadata is unreadable"
+        ) from error
+
+    if (
+        not isinstance(development, dict)
+        or development.get("schema")
+        != "treeforge.development-provider.v1"
+        or development.get("provider")
+        != "kernel"
+        or development.get("channel")
+        != "development"
+        or development.get("release_eligible")
+        is not False
+    ):
+        raise TreeForgeBootstrapKernelProviderError(
+            "kernel development provider "
+            "identity changed"
+        )
+
+    version = development.get(
+        "version"
+    )
+
+    if (
+        not isinstance(version, str)
+        or not version
+    ):
+        raise TreeForgeBootstrapKernelProviderError(
+            "kernel development provider "
+            "version missing"
+        )
+
+    if (
+        not isinstance(metadata, dict)
+        or metadata.get("schema")
+        != "treeforge.kernel.module-provider.v2"
+        or metadata.get("release")
+        != version
+        or metadata.get("target")
+        != "tangorpro"
+        or metadata.get("android_base")
+        != "android15"
+    ):
+        raise TreeForgeBootstrapKernelProviderError(
+            "kernel development module "
+            "provider identity changed"
+        )
+
+    reconstruction = metadata.get(
+        "reconstruction"
+    )
+
+    if (
+        not isinstance(
+            reconstruction,
+            dict,
+        )
+        or reconstruction.get(
+            "carrier_source"
+        )
+        != "current-installed"
+        or reconstruction.get(
+            "carrier_policy"
+        )
+        != "patch-current"
+        or reconstruction.get(
+            "non_module_payload"
+        )
+        != "preserve-exact"
+        or reconstruction.get(
+            "module_tree_policy"
+        )
+        != "replace-exact"
+        or reconstruction.get(
+            "regenerate_module_metadata"
+        )
+        is not True
+        or reconstruction.get(
+            "partition_images_distributed"
+        )
+        is not False
+        or reconstruction.get(
+            "owner_avb"
+        )
+        != "local-device-owner-resign"
+    ):
+        raise TreeForgeBootstrapKernelProviderError(
+            "kernel development carrier "
+            "policy changed"
+        )
+
+    carrier_policy = reconstruction.get(
+        "carriers"
+    )
+
+    if (
+        not isinstance(
+            carrier_policy,
+            dict,
+        )
+        or set(carrier_policy)
+        != {
+            "vendor_kernel_boot",
+            "vendor_dlkm",
+            "system_dlkm",
+        }
+    ):
+        raise TreeForgeBootstrapKernelProviderError(
+            "kernel development carrier "
+            "policy set changed"
+        )
+
+    carriers = metadata.get(
+        "carriers"
+    )
+
+    if (
+        not isinstance(carriers, dict)
+        or set(carriers)
+        != {
+            "vendor_kernel_boot",
+            "vendor_dlkm",
+            "system_dlkm",
+        }
+    ):
+        raise TreeForgeBootstrapKernelProviderError(
+            "kernel development carrier "
+            "payload set changed"
+        )
+
+    _verify_development_checksums(
+        root
+    )
+
+    boot = root / "boot.img"
+
+    if (
+        not boot.is_file()
+        or sha256(boot)
+        != metadata.get("boot_sha256")
+    ):
+        raise TreeForgeBootstrapKernelProviderError(
+            "kernel development boot "
+            "identity mismatch"
+        )
+
+    archive = (
+        _development_android_archive(
+            root
+        )
+    )
+
+    return {
+        "release": version,
+        "boot": boot,
+        "manifest": module_path,
+        "archive": archive,
+        "metadata": metadata,
+        "development": development,
+        "root": root,
+    }
+
+
+def configure_kernel_provider_override(
+    root: Path | None,
+) -> None:
+    global _KERNEL_PROVIDER_OVERRIDE
+
+    if root is None:
+        _KERNEL_PROVIDER_OVERRIDE = None
+        return
+
+    resolved = (
+        root
+        .expanduser()
+        .resolve()
+    )
+
+    _verify_development_provider_contract(
+        resolved
+    )
+
+    _KERNEL_PROVIDER_OVERRIDE = (
+        resolved
+    )
+
+
+def kernel_provider_override(
+) -> Path | None:
+    return _KERNEL_PROVIDER_OVERRIDE
+
+
 def sha256(
     path: Path,
 ) -> str:
@@ -483,6 +800,15 @@ def _verify_provider_contract(
 
 
 def ensure_bootstrap_kernel() -> Path:
+    if _KERNEL_PROVIDER_OVERRIDE is not None:
+        provider = (
+            _verify_development_provider_contract(
+                _KERNEL_PROVIDER_OVERRIDE
+            )
+        )
+
+        return provider["boot"]
+
     return _ensure_asset(
         KERNEL_ASSET
     )
@@ -490,6 +816,13 @@ def ensure_bootstrap_kernel() -> Path:
 
 def ensure_kernel_reconstruction_provider(
 ) -> dict[str, object]:
+    if _KERNEL_PROVIDER_OVERRIDE is not None:
+        return (
+            _verify_development_provider_contract(
+                _KERNEL_PROVIDER_OVERRIDE
+            )
+        )
+
     boot = _ensure_asset(
         KERNEL_ASSET
     )

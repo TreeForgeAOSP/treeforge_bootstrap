@@ -20,6 +20,17 @@ from .menu_provider import (
     load_menu_provider,
 )
 
+from .kernel_provider import (
+    configure_kernel_provider_override,
+    ensure_kernel_reconstruction_provider,
+)
+
+from .development_overrides import (
+    TreeForgeDevelopmentOverrideError,
+    activate as activate_development_provider,
+    remove as remove_development_provider,
+)
+
 from .paths import (
     OUT,
     PROVIDERS,
@@ -206,6 +217,8 @@ def main() -> None:
             "verify-frozen-runtime",
             "package",
             "verify-provider",
+            "package-development",
+            "verify-development-provider",
             "image",
             "verify-image",
             "realize-family",
@@ -281,25 +294,65 @@ def main() -> None:
     )
 
     parser.add_argument(
-        "--framebuffer-provider",
-        type=Path,
+        "--dev-provider-kernel",
+        nargs="?",
+        const="",
+        metavar="PATH",
         help=(
-            "Development-only local treeforge_bootstrap_framebuffer "
-            "provider root. The default resolves the latest published "
-            "compatible provider. When supplied to image/realize-family, the CLI "
-            "builds and verifies a development runtime before image "
-            "realization."
+            "Use the remembered local Kernel "
+            "development provider, or validate "
+            "and remember PATH."
         ),
     )
 
     parser.add_argument(
-        "--menu-provider",
-        type=Path,
+        "--dev-provider-kernel-remove",
+        action="store_true",
         help=(
-            "Development-only local treeforge_bootstrap_menu provider root. "
-            "The default resolves the latest published compatible provider. "
-            "When supplied to image/realize-family, the CLI builds and verifies "
-            "a development runtime before image realization."
+            "Forget the remembered local Kernel "
+            "development provider."
+        ),
+    )
+
+    parser.add_argument(
+        "--dev-provider-framebuffer",
+        nargs="?",
+        const="",
+        metavar="PATH",
+        help=(
+            "Use the remembered local Framebuffer "
+            "development provider, or validate "
+            "and remember PATH."
+        ),
+    )
+
+    parser.add_argument(
+        "--dev-provider-framebuffer-remove",
+        action="store_true",
+        help=(
+            "Forget the remembered local Framebuffer "
+            "development provider."
+        ),
+    )
+
+    parser.add_argument(
+        "--dev-provider-menu",
+        nargs="?",
+        const="",
+        metavar="PATH",
+        help=(
+            "Use the remembered local Menu "
+            "development provider, or validate "
+            "and remember PATH."
+        ),
+    )
+
+    parser.add_argument(
+        "--dev-provider-menu-remove",
+        action="store_true",
+        help=(
+            "Forget the remembered local Menu "
+            "development provider."
         ),
     )
 
@@ -309,23 +362,188 @@ def main() -> None:
         default=BUILD_PROFILE,
     )
 
+    parser.add_argument(
+        "--transaction-request",
+        type=Path,
+        help=(
+            "Optional canonical TreeForge Bootstrap "
+            "transaction request file consumed only "
+            "by realize-family and embedded as "
+            "vendor_boot transaction/request-v1."
+        ),
+    )
+
     args = parser.parse_args()
 
     if args.profile != BUILD_PROFILE:
         parser.error("Build-profile mismatch")
 
+    removal_requested = False
+
+    for name, requested, remove_flag in (
+        (
+            "kernel",
+            args.dev_provider_kernel,
+            args.dev_provider_kernel_remove,
+        ),
+        (
+            "framebuffer",
+            args.dev_provider_framebuffer,
+            args.dev_provider_framebuffer_remove,
+        ),
+        (
+            "menu",
+            args.dev_provider_menu,
+            args.dev_provider_menu_remove,
+        ),
+    ):
+        if (
+            remove_flag
+            and requested is not None
+        ):
+            parser.error(
+                f"--dev-provider-{name} and "
+                f"--dev-provider-{name}-remove "
+                "are mutually exclusive"
+            )
+
+        if remove_flag:
+            removal_requested = True
+
+            try:
+                existed = (
+                    remove_development_provider(
+                        name
+                    )
+                )
+            except TreeForgeDevelopmentOverrideError as error:
+                parser.error(
+                    str(error)
+                )
+
+            print(
+                "DEVELOPMENT_PROVIDER_REMOVED_"
+                + name.upper()
+                + "="
+                + (
+                    "YES"
+                    if existed
+                    else "NO"
+                )
+            )
+
+    kernel_path = None
+    framebuffer_path = None
+    menu_path = None
+
+    kernel_provider = None
+    framebuffer_provider = None
+    menu_provider = None
+
+    try:
+        if args.dev_provider_kernel is not None:
+            def validate_kernel(
+                candidate: Path,
+            ):
+                configure_kernel_provider_override(
+                    candidate
+                )
+
+                return (
+                    ensure_kernel_reconstruction_provider()
+                )
+
+            (
+                kernel_path,
+                kernel_provider,
+            ) = activate_development_provider(
+                "kernel",
+                args.dev_provider_kernel,
+                prompt_label=(
+                    "Kernel development provider path"
+                ),
+                validator=validate_kernel,
+            )
+
+        if (
+            args.dev_provider_framebuffer
+            is not None
+        ):
+            def validate_framebuffer(
+                candidate: Path,
+            ):
+                configure_framebuffer_provider_override(
+                    candidate
+                )
+
+                return (
+                    load_framebuffer_provider()
+                )
+
+            (
+                framebuffer_path,
+                framebuffer_provider,
+            ) = activate_development_provider(
+                "framebuffer",
+                args.dev_provider_framebuffer,
+                prompt_label=(
+                    "Framebuffer development "
+                    "provider path"
+                ),
+                validator=validate_framebuffer,
+            )
+
+        if args.dev_provider_menu is not None:
+            def validate_menu(
+                candidate: Path,
+            ):
+                configure_menu_provider_override(
+                    candidate
+                )
+
+                return load_menu_provider()
+
+            (
+                menu_path,
+                menu_provider,
+            ) = activate_development_provider(
+                "menu",
+                args.dev_provider_menu,
+                prompt_label=(
+                    "Menu development provider path"
+                ),
+                validator=validate_menu,
+            )
+
+    except (
+        TreeForgeDevelopmentOverrideError,
+        Exception,
+    ) as error:
+        parser.error(
+            str(error)
+        )
+
     development_runtime = (
-        args.framebuffer_provider is not None
-        or args.menu_provider is not None
+        framebuffer_path is not None
+        or menu_path is not None
     )
 
-    if development_runtime:
+    development_kernel = (
+        kernel_path is not None
+    )
+
+    if (
+        development_runtime
+        or development_kernel
+    ):
         if args.profile != "treeforge-default":
             parser.error(
-                "development provider overrides currently support "
+                "development provider overrides "
+                "currently support "
                 "treeforge-default only"
             )
 
+    if development_runtime:
         allowed = {
             "doctor",
             "build",
@@ -337,35 +555,76 @@ def main() -> None:
 
         if args.command not in allowed:
             parser.error(
-                "development provider overrides are valid only for "
-                "doctor/build/verify/image/verify-image/realize-family"
+                "Framebuffer/Menu development "
+                "providers are valid only for "
+                "doctor/build/verify/image/"
+                "verify-image/realize-family"
             )
 
-        if args.framebuffer_provider is not None:
-            configure_framebuffer_provider_override(
-                args.framebuffer_provider
-            )
-            provider = load_framebuffer_provider()
-            print(
-                "FRAMEBUFFER_PROVIDER_MODE=development-local"
-            )
-            print(
-                "FRAMEBUFFER_PROVIDER_ROOT="
-                + str(provider.root)
+    if development_kernel:
+        allowed = {
+            "doctor",
+            "image",
+            "verify-image",
+            "realize-family",
+        }
+
+        if args.command not in allowed:
+            parser.error(
+                "Kernel development provider is "
+                "valid only for doctor/image/"
+                "verify-image/realize-family"
             )
 
-        if args.menu_provider is not None:
-            configure_menu_provider_override(
-                args.menu_provider
+    if kernel_path is not None:
+        print(
+            "KERNEL_PROVIDER_MODE="
+            "development-local"
+        )
+        print(
+            "KERNEL_PROVIDER_ROOT="
+            + str(kernel_path)
+        )
+        print(
+            "KERNEL_PROVIDER_VERSION="
+            + str(
+                kernel_provider["release"]
             )
-            provider = load_menu_provider()
-            print(
-                "MENU_PROVIDER_MODE=development-local"
-            )
-            print(
-                "MENU_PROVIDER_ROOT="
-                + str(provider.root)
-            )
+        )
+
+    if framebuffer_path is not None:
+        print(
+            "FRAMEBUFFER_PROVIDER_MODE="
+            "development-local"
+        )
+        print(
+            "FRAMEBUFFER_PROVIDER_ROOT="
+            + str(framebuffer_path)
+        )
+        print(
+            "FRAMEBUFFER_PROVIDER_VERSION="
+            + framebuffer_provider.version
+        )
+
+    if menu_path is not None:
+        print(
+            "MENU_PROVIDER_MODE="
+            "development-local"
+        )
+        print(
+            "MENU_PROVIDER_ROOT="
+            + str(menu_path)
+        )
+        print(
+            "MENU_PROVIDER_VERSION="
+            + menu_provider.version
+        )
+
+    if (
+        args.command is None
+        and removal_requested
+    ):
+        return
 
     if args.profile == "treeforge-chromiumos":
         if args.command not in (
@@ -384,6 +643,17 @@ def main() -> None:
         doctor()
     elif args.command == "build":
         build_runtime()
+        verify_runtime()
+
+        if (
+            BUILD_PROFILE
+            == "treeforge-default"
+        ):
+            from .development_provider import (
+                package_development_provider,
+            )
+
+            package_development_provider()
     elif args.command == "verify":
         verify_runtime()
     elif args.command == "verify-frozen-runtime":
@@ -396,6 +666,16 @@ def main() -> None:
         verify_provider()
         from .realizer_provider import verify_realizer_provider
         verify_realizer_provider()
+    elif args.command == "package-development":
+        from .development_provider import (
+            package_development_provider,
+        )
+        package_development_provider()
+    elif args.command == "verify-development-provider":
+        from .development_provider import (
+            verify_development_provider,
+        )
+        verify_development_provider()
     elif args.command == "image":
         if BUILD_PROFILE == "treeforge-chromiumos":
             from .chromiumos_init_boot import build
@@ -532,6 +812,47 @@ def main() -> None:
                 "AVB_KEYSET_VERIFY=PASS"
             )
 
+        transaction_request = None
+
+        if args.transaction_request is not None:
+            transaction_request_path = (
+                args.transaction_request
+                .expanduser()
+                .resolve()
+            )
+
+            if not transaction_request_path.is_file():
+                parser.error(
+                    "--transaction-request does not "
+                    "exist or is not a regular file: "
+                    f"{transaction_request_path}"
+                )
+
+            transaction_request = (
+                transaction_request_path
+                .read_bytes()
+            )
+
+            if len(transaction_request) != 119:
+                parser.error(
+                    "--transaction-request must be "
+                    "exactly 119 bytes; got "
+                    f"{len(transaction_request)}"
+                )
+
+            print(
+                "TRANSACTION_REQUEST="
+                f"{transaction_request_path}"
+            )
+            print(
+                "TRANSACTION_REQUEST_BYTES="
+                f"{len(transaction_request)}"
+            )
+            print(
+                "TRANSACTION_REQUEST_SHA256="
+                f"{_sha256(transaction_request_path)}"
+            )
+
         realize_family(
             args.input_family,
             output_family=(
@@ -556,6 +877,7 @@ def main() -> None:
             development_runtime=(
                 development_runtime
             ),
+            transaction_request=transaction_request,
         )
     else:
         hardware_preflight()

@@ -21,6 +21,11 @@ from .image import (
     verify_image,
 )
 
+from .vendor_boot_carrier import (
+    TreeForgeVendorBootCarrierError,
+    realize_vendor_boot_carrier,
+)
+
 from .paths import (
     OUT,
     WORK,
@@ -1594,6 +1599,7 @@ def _rebuild_root_for_boot_chain_key(
 
     for partition in ROOT_DESCRIPTOR_TARGETS:
         if partition in {
+            "vendor_boot",
             "vendor_kernel_boot",
             "vendor_dlkm",
         }:
@@ -1726,6 +1732,27 @@ def _realize_kernel_carriers_for_family(
         raise TreeForgeBootstrapAvbGraphError(
             "TreeForge Kernel carrier reconstruction "
             f"failed: {exc}"
+        ) from exc
+
+
+def _realize_vendor_boot_carrier_for_family(
+    *,
+    source: Path,
+    output: Path,
+    transaction_request: bytes | None = None,
+) -> Path:
+    try:
+        return realize_vendor_boot_carrier(
+            source=source,
+            output=output,
+            transaction_request=transaction_request,
+        )
+
+    except TreeForgeVendorBootCarrierError as exc:
+        raise TreeForgeBootstrapAvbGraphError(
+            "TreeForge Bootstrap vendor_boot "
+            "carrier reconstruction failed: "
+            f"{exc}"
         ) from exc
 
 
@@ -2158,6 +2185,7 @@ def realize_family(
     keyset_id: str | None = None,
     keyset_manifest_sha256: str | None = None,
     development_runtime: bool = False,
+    transaction_request: bytes | None = None,
 ) -> Path:
     (
         input_root,
@@ -2316,6 +2344,24 @@ def realize_family(
         )
     )
 
+    vendor_boot_carrier_work = (
+        REALIZED_WORK
+        / ".vendor-boot-carrier"
+    )
+
+    vendor_boot_carrier = (
+        _realize_vendor_boot_carrier_for_family(
+            source=source_images[
+                "vendor_boot"
+            ],
+            output=(
+                vendor_boot_carrier_work
+                / "vendor_boot.img"
+            ),
+            transaction_request=transaction_request,
+        )
+    )
+
     realized_images: dict[
         str,
         Path,
@@ -2339,6 +2385,12 @@ def realize_family(
                 destination,
             )
 
+        elif name == "vendor_boot":
+            _copy_generated(
+                vendor_boot_carrier,
+                destination,
+            )
+
         elif name in kernel_carriers:
             _copy_generated(
                 kernel_carriers[name],
@@ -2358,6 +2410,11 @@ def realize_family(
     if kernel_carrier_work.exists():
         shutil.rmtree(
             kernel_carrier_work
+        )
+
+    if vendor_boot_carrier_work.exists():
+        shutil.rmtree(
+            vendor_boot_carrier_work
         )
 
     trust_realization = (
@@ -2427,6 +2484,7 @@ def realize_family(
     allowed_changed = {
         "boot",
         "init_boot",
+        "vendor_boot",
         "vendor_kernel_boot",
         "vendor_dlkm",
         "system_dlkm",
@@ -2566,6 +2624,9 @@ def realize_family(
                 ]
                 else "bootstrap-runtime"
             )
+
+        elif name == "vendor_boot":
+            role = "bootstrap-vendor-boot-carrier"
 
         elif name in kernel_carriers:
             role = "kernel-family-carrier"

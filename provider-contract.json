@@ -100,16 +100,16 @@
     "menu_identity": "TreeForge Boot Manager",
     "payload": {
       "initramfs.cpio": {
-        "bytes": 15588280,
-        "sha256": "d98b8447561330bccd8caf7ee4a4748c9e56a18fc985efbe60f4bede8cdebc4a"
+        "bytes": 15590176,
+        "sha256": "0a4cedb5f0934872f33b14fcc36cf032b797c133ae1f5c9357b0b1428c42257b"
       },
       "initramfs.lz4": {
-        "bytes": 7748153,
-        "sha256": "0f2de3768b8f28d8ea74d0a64a7c194ac4f8bc428ae859fc334bfa1d42c57ee7"
+        "bytes": 7749331,
+        "sha256": "b55dd23b55c457218f80855566bcab9e0ea637904b696170a5f43fd13a62c518"
       },
       "treeforge-menu": {
-        "bytes": 10228257,
-        "sha256": "79384e134f8be1812a7cd0616073e8d9d3d3fc201bfb943f84c2233f8def5fad"
+        "bytes": 10230153,
+        "sha256": "010c59a84348c36f392af939b1e3feb9f75012c3295f8a1cd1918db5a8f49a52"
       }
     },
     "reproducible": true,
