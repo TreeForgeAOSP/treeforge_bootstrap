@@ -27,6 +27,7 @@ from .paths import (
     INITRAMFS_ROOT,
     OUT,
     PROVIDERS,
+    REPOSITORY_ROOT,
     WORK,
 )
 
@@ -804,6 +805,132 @@ def build_runtime() -> Path:
 
 
 
+
+def _packaged_runtime_expectations(
+) -> tuple[
+    tuple[Path, str, int, str],
+    ...,
+] | None:
+    #
+    # The normalized development provider is directly resolver-ready:
+    #   <provider>/metadata/realizer-provider.json
+    #
+    # A normally extracted release realizer uses:
+    #   <realizer>/payload/...
+    #   <realizer>/metadata/realizer-provider.json
+    #
+    # Both are provider roots. A normal source checkout has neither metadata
+    # location and therefore keeps using the repository's strict frozen
+    # release constants below.
+    #
+    direct_metadata = (
+        REPOSITORY_ROOT
+        / "metadata"
+        / "realizer-provider.json"
+    )
+
+    extracted_metadata = (
+        REPOSITORY_ROOT.parent
+        / "metadata"
+        / "realizer-provider.json"
+    )
+
+    if direct_metadata.is_file():
+        metadata_path = direct_metadata
+    elif (
+        REPOSITORY_ROOT.name == "payload"
+        and extracted_metadata.is_file()
+    ):
+        metadata_path = extracted_metadata
+    else:
+        return None
+
+    try:
+        metadata = json.loads(
+            metadata_path.read_text(
+                encoding="utf-8"
+            )
+        )
+    except (
+        OSError,
+        json.JSONDecodeError,
+    ) as error:
+        raise TreeForgeBootstrapRuntimeError(
+            "packaged realizer metadata is unreadable"
+        ) from error
+
+    payload = metadata.get(
+        "runtime_payload"
+    )
+
+    if not isinstance(payload, dict):
+        raise TreeForgeBootstrapRuntimeError(
+            "packaged realizer has no runtime_payload contract"
+        )
+
+    result = []
+
+    for path, label in (
+        (
+            RAW_INITRAMFS,
+            "initramfs.cpio",
+        ),
+        (
+            COMPRESSED_INITRAMFS,
+            "initramfs.lz4",
+        ),
+        (
+            MENU_BINARY,
+            "treeforge-menu",
+        ),
+    ):
+        record = payload.get(label)
+
+        if not isinstance(record, dict):
+            raise TreeForgeBootstrapRuntimeError(
+                "packaged runtime contract missing: "
+                + label
+            )
+
+        expected_sha256 = record.get(
+            "sha256"
+        )
+        expected_bytes = record.get(
+            "bytes"
+        )
+
+        if (
+            not isinstance(
+                expected_sha256,
+                str,
+            )
+            or len(expected_sha256) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in expected_sha256.lower()
+            )
+            or not isinstance(
+                expected_bytes,
+                int,
+            )
+            or expected_bytes < 0
+        ):
+            raise TreeForgeBootstrapRuntimeError(
+                "packaged runtime contract is invalid: "
+                + label
+            )
+
+        result.append(
+            (
+                path,
+                expected_sha256.lower(),
+                expected_bytes,
+                label,
+            )
+        )
+
+    return tuple(result)
+
 def verify_frozen_runtime() -> Path:
     """
     Verify the exact released Bootstrap runtime payload without
@@ -821,25 +948,30 @@ def verify_frozen_runtime() -> Path:
 
 
     expected = (
-        (
-            RAW_INITRAMFS,
-            FROZEN_RUNTIME_CPIO_SHA256,
-            FROZEN_RUNTIME_CPIO_BYTES,
-            "initramfs.cpio",
-        ),
-        (
-            COMPRESSED_INITRAMFS,
-            FROZEN_RUNTIME_LZ4_SHA256,
-            FROZEN_RUNTIME_LZ4_BYTES,
-            "initramfs.lz4",
-        ),
-        (
-            MENU_BINARY,
-            FROZEN_RUNTIME_MENU_SHA256,
-            FROZEN_RUNTIME_MENU_BYTES,
-            "treeforge-menu",
-        ),
+        _packaged_runtime_expectations()
     )
+
+    if expected is None:
+        expected = (
+            (
+                RAW_INITRAMFS,
+                FROZEN_RUNTIME_CPIO_SHA256,
+                FROZEN_RUNTIME_CPIO_BYTES,
+                "initramfs.cpio",
+            ),
+            (
+                COMPRESSED_INITRAMFS,
+                FROZEN_RUNTIME_LZ4_SHA256,
+                FROZEN_RUNTIME_LZ4_BYTES,
+                "initramfs.lz4",
+            ),
+            (
+                MENU_BINARY,
+                FROZEN_RUNTIME_MENU_SHA256,
+                FROZEN_RUNTIME_MENU_BYTES,
+                "treeforge-menu",
+            ),
+        )
 
     for (
         path,

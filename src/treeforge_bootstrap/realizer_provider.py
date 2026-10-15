@@ -441,6 +441,33 @@ def _realizer_metadata(
         _version_values()
     )
 
+    runtime_root = (
+        ROOT
+        / "out"
+        / "tangorpro"
+        / "runtime"
+    )
+
+    runtime_payload = {}
+
+    for name in (
+        "initramfs.cpio",
+        "initramfs.lz4",
+        "treeforge-menu",
+    ):
+        artifact = runtime_root / name
+
+        if not artifact.is_file():
+            raise TreeForgeBootstrapRealizerProviderError(
+                "runtime dependency payload missing: "
+                + str(artifact)
+            )
+
+        runtime_payload[name] = {
+            "bytes": artifact.stat().st_size,
+            "sha256": _sha256(artifact),
+        }
+
     return {
         "schema": 1,
         "provider":
@@ -477,6 +504,8 @@ def _realizer_metadata(
             "sha256":
                 runtime_sha,
         },
+        "runtime_payload":
+            runtime_payload,
         "consumer_inputs": {
             "avb_keyset":
                 True,

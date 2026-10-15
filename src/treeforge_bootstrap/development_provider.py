@@ -1321,6 +1321,7 @@ def _prune_runs() -> None:
 
 
 def package_development_provider() -> Path:
+    verify_runtime()
     versions = _version_fields()
 
     menu = load_menu_provider()

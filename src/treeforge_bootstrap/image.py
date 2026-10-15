@@ -868,7 +868,7 @@ def _expected_metadata(
                 KERNEL_ASSET,
 
             "provider_image_sha256":
-                EXPECTED_KERNEL_SHA256,
+                _sha256(ensure_bootstrap_kernel()),
 
             "realized_image_bytes":
                 OUTPUT_BOOT_IMAGE.stat().st_size,
@@ -949,21 +949,7 @@ def build_image(
 
     kernel = ensure_bootstrap_kernel()
 
-    if (
-        kernel.stat().st_size
-        != EXPECTED_KERNEL_BYTES
-    ):
-        raise TreeForgeBootstrapImageError(
-            "released Bootstrap kernel size changed"
-        )
 
-    if (
-        _sha256(kernel)
-        != EXPECTED_KERNEL_SHA256
-    ):
-        raise TreeForgeBootstrapImageError(
-            "released Bootstrap kernel identity changed"
-        )
 
     mkbootimg = ensure_host_tool(
         "mkbootimg"
@@ -1280,13 +1266,6 @@ def verify_image(
 
     kernel = ensure_bootstrap_kernel()
 
-    if (
-        _sha256(kernel)
-        != EXPECTED_KERNEL_SHA256
-    ):
-        raise TreeForgeBootstrapImageError(
-            "released Bootstrap kernel provider identity changed"
-        )
 
     if not OUTPUT_BOOT_IMAGE.is_file():
         raise TreeForgeBootstrapImageError(

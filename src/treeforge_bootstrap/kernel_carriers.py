@@ -221,6 +221,7 @@ def _apply_ext4_metadata(
     root: Path,
     context: str,
     module_context: str | None = None,
+    include_root_metadata: bool = True,
 ) -> None:
     debugfs = shutil.which(
         "debugfs"
@@ -259,10 +260,15 @@ def _apply_ext4_metadata(
                 + b"\0"
             )
 
-        paths = [
-            Path("/"),
-            Path("/lost+found"),
-        ]
+        paths: list[Path] = []
+
+        if include_root_metadata:
+            paths.extend(
+                [
+                    Path("/"),
+                    Path("/lost+found"),
+                ]
+            )
 
         for item in sorted(
             root.rglob("*")
@@ -368,6 +374,7 @@ def _apply_ext4_metadata(
 def _realize_dlkm(
     *,
     name: str,
+    source: Path,
     payload_root: Path,
     output: Path,
 ) -> None:
@@ -375,20 +382,44 @@ def _realize_dlkm(
         name
     ]
 
-    mke2fs = shutil.which(
-        "mke2fs"
+    avbtool = ensure_kernel_avbtool()
+
+    debugfs_value = shutil.which(
+        "debugfs"
     )
 
-    if mke2fs is None:
+    if debugfs_value is None:
         raise TreeForgeKernelCarrierError(
-            "mke2fs is required"
+            "debugfs is required"
         )
 
-    #
-    # DLKM images produced by the accepted r0.94 kernel
-    # build use the kernel build-tools avbtool 1.2.0.
-    #
-    avbtool = ensure_kernel_avbtool()
+    debugfs = Path(
+        debugfs_value
+    )
+
+    source_info = _avb_info(
+        avbtool,
+        source,
+    )
+
+    if "Hashtree descriptor:" not in source_info:
+        raise TreeForgeKernelCarrierError(
+            f"{name} source AVB hashtree missing"
+        )
+
+    source_partition_bytes = (
+        source.stat().st_size
+    )
+
+    source_salt = _avb_salt(
+        source_info
+    )
+
+    source_properties = (
+        _avb_properties(
+            source_info
+        )
+    )
 
     source_root = (
         payload_root
@@ -410,12 +441,10 @@ def _realize_dlkm(
     # Published provider payloads retain the conventional
     # host-side lib/modules/<kernel-release>/ hierarchy.
     #
-    # Pixel Android DLKM images do not. Their on-device ABI is
-    # basename-flat:
+    # Pixel Android DLKM images use a basename-flat on-device
+    # module tree:
     #
     #   /lib/modules/foo.ko
-    #
-    # with text metadata referring to those basenames.
     #
     release_roots = [
         entry
@@ -433,10 +462,14 @@ def _realize_dlkm(
         source_modules
         / "modules.load"
     ).is_file():
-        module_source = source_modules
+        module_source = (
+            source_modules
+        )
 
     elif len(release_roots) == 1:
-        module_source = release_roots[0]
+        module_source = (
+            release_roots[0]
+        )
 
     else:
         raise TreeForgeKernelCarrierError(
@@ -473,19 +506,34 @@ def _realize_dlkm(
             f"{name} contains no kernel modules"
         )
 
-    basename_sources: dict[str, Path] = {}
+    basename_sources: dict[
+        str,
+        Path,
+    ] = {}
 
     for module in modules:
         basename = module.name
 
-        previous = basename_sources.get(
-            basename
+        if not re.fullmatch(
+            r"[A-Za-z0-9._+-]+",
+            basename,
+        ):
+            raise TreeForgeKernelCarrierError(
+                f"{name} unsafe module basename: "
+                f"{basename}"
+            )
+
+        previous = (
+            basename_sources.get(
+                basename
+            )
         )
 
         if previous is not None:
             raise TreeForgeKernelCarrierError(
                 f"{name} duplicate module basename: "
-                f"{basename}: {previous} and {module}"
+                f"{basename}: "
+                f"{previous} and {module}"
             )
 
         basename_sources[
@@ -499,22 +547,21 @@ def _realize_dlkm(
         )
 
     #
-    # Stock DLKM images retain only the text libmodprobe
-    # metadata needed by Android.
+    # Preserve the accepted Android text metadata surface.
     #
     for metadata_name in (
         "modules.alias",
         "modules.blocklist",
         "modules.softdep",
     ):
-        source = (
+        metadata_source = (
             module_source
             / metadata_name
         )
 
-        if source.is_file():
+        if metadata_source.is_file():
             shutil.copy2(
-                source,
+                metadata_source,
                 flat_modules
                 / metadata_name,
             )
@@ -531,15 +578,21 @@ def _realize_dlkm(
 
     load_lines: list[str] = []
 
-    for raw_line in modules_load.read_text(
-        encoding="utf-8"
-    ).splitlines():
+    for raw_line in (
+        modules_load
+        .read_text(
+            encoding="utf-8"
+        )
+        .splitlines()
+    ):
         line = raw_line.strip()
 
         if not line:
             continue
 
-        basename = Path(line).name
+        basename = Path(
+            line
+        ).name
 
         if basename not in basename_sources:
             raise TreeForgeKernelCarrierError(
@@ -555,7 +608,9 @@ def _realize_dlkm(
         flat_modules
         / "modules.load"
     ).write_text(
-        "\n".join(load_lines)
+        "\n".join(
+            load_lines
+        )
         + "\n",
         encoding="utf-8",
     )
@@ -572,22 +627,29 @@ def _realize_dlkm(
 
     dep_lines: list[str] = []
 
-    for raw_line in modules_dep.read_text(
-        encoding="utf-8"
-    ).splitlines():
+    for raw_line in (
+        modules_dep
+        .read_text(
+            encoding="utf-8"
+        )
+        .splitlines()
+    ):
         if ":" not in raw_line:
             if raw_line.strip():
                 raise TreeForgeKernelCarrierError(
-                    f"{name} malformed modules.dep line: "
+                    f"{name} malformed "
+                    f"modules.dep line: "
                     f"{raw_line}"
                 )
+
             continue
 
-        module_path, dependency_text = (
-            raw_line.split(
-                ":",
-                1,
-            )
+        (
+            module_path,
+            dependency_text,
+        ) = raw_line.split(
+            ":",
+            1,
         )
 
         module_name = Path(
@@ -596,7 +658,8 @@ def _realize_dlkm(
 
         dependencies = [
             Path(value).name
-            for value in dependency_text.split()
+            for value
+            in dependency_text.split()
         ]
 
         rendered = (
@@ -620,70 +683,214 @@ def _realize_dlkm(
         flat_modules
         / "modules.dep"
     ).write_text(
-        "\n".join(dep_lines)
+        "\n".join(
+            dep_lines
+        )
         + "\n",
         encoding="utf-8",
     )
 
-    carrier_root = staging_root
-
+    #
+    # patch-current:
+    #
+    # Start from the complete installed carrier, not a new
+    # modules-only filesystem. erase_footer removes the old AVB
+    # hashtree/footer and returns the image to its original ext4
+    # filesystem size while preserving every filesystem inode.
+    #
     if output.exists():
         output.unlink()
 
+    shutil.copy2(
+        source,
+        output,
+    )
+
     _run(
         [
-            mke2fs,
-            "-q",
-            "-F",
-            "-t",
-            "ext4",
-            "-b",
-            "4096",
-            "-N",
-            str(geometry["inodes"]),
-            "-L",
-            name,
-            "-U",
-            geometry["uuid"],
-            "-O",
-            (
-                "ext_attr,dir_index,filetype,"
-                "extent,sparse_super,large_file,"
-                "huge_file,uninit_bg,dir_nlink,"
-                "extra_isize,^has_journal,"
-                "^metadata_csum,^64bit,^flex_bg"
-            ),
-            "-E",
-            (
-                "lazy_itable_init=0,"
-                "lazy_journal_init=0,"
-                "root_owner=0:0"
-            ),
-            "-d",
-            carrier_root,
+            avbtool,
+            "erase_footer",
+            "--image",
             output,
-            str(geometry["blocks"]),
         ]
     )
 
-    expected_fs = int(
-        geometry[
-            "filesystem_bytes"
-        ]
+    filesystem_bytes = (
+        output.stat().st_size
     )
 
-    if output.stat().st_size != expected_fs:
+    if (
+        filesystem_bytes <= 0
+        or filesystem_bytes
+        >= source_partition_bytes
+    ):
         raise TreeForgeKernelCarrierError(
-            f"{name} filesystem size changed: "
-            f"{output.stat().st_size} != "
-            f"{expected_fs}"
+            f"{name} AVB footer erase "
+            "did not expose filesystem"
         )
 
+    #
+    # Enumerate the existing flat module directory. Android's
+    # tangorpro DLKM ABI is intentionally flat; nested content
+    # here would require an explicit policy decision rather than
+    # silently deleting it.
+    #
+    listing = _run(
+        [
+            debugfs,
+            "-R",
+            "ls -p /lib/modules",
+            output,
+        ]
+    ).stdout.decode(
+        errors="replace"
+    )
+
+    existing_entries: list[str] = []
+
+    for raw_line in listing.splitlines():
+        line = raw_line.strip()
+
+        if not line.startswith("/"):
+            continue
+
+        fields = line.split("/")
+
+        if len(fields) < 7:
+            continue
+
+        mode = fields[2]
+        entry_name = fields[5]
+
+        if entry_name in {
+            ".",
+            "..",
+        }:
+            continue
+
+        if not re.fullmatch(
+            r"[A-Za-z0-9._+-]+",
+            entry_name,
+        ):
+            raise TreeForgeKernelCarrierError(
+                f"{name} unsafe existing "
+                f"module-tree entry: "
+                f"{entry_name}"
+            )
+
+        if mode.startswith("04"):
+            raise TreeForgeKernelCarrierError(
+                f"{name} unexpected nested "
+                f"module directory: "
+                f"{entry_name}"
+            )
+
+        existing_entries.append(
+            entry_name
+        )
+
+    if not existing_entries:
+        raise TreeForgeKernelCarrierError(
+            f"{name} source module tree empty"
+        )
+
+    with tempfile.TemporaryDirectory(
+        prefix=f".treeforge-{name}-patch-"
+    ) as raw:
+        temporary = Path(raw)
+
+        commands = (
+            temporary
+            / "debugfs.commands"
+        )
+
+        with commands.open(
+            "w",
+            encoding="utf-8",
+        ) as stream:
+            #
+            # Replace-exact means no stale source modules or
+            # metadata may survive.
+            #
+            for entry_name in sorted(
+                set(existing_entries)
+            ):
+                stream.write(
+                    "rm "
+                    f"/lib/modules/"
+                    f"{entry_name}\n"
+                )
+
+            for item in sorted(
+                flat_modules.iterdir()
+            ):
+                if not item.is_file():
+                    raise (
+                        TreeForgeKernelCarrierError(
+                            f"{name} generated module "
+                            f"tree is not flat: {item}"
+                        )
+                    )
+
+                entry_name = item.name
+
+                if not re.fullmatch(
+                    r"[A-Za-z0-9._+-]+",
+                    entry_name,
+                ):
+                    raise (
+                        TreeForgeKernelCarrierError(
+                            f"{name} unsafe generated "
+                            f"module-tree entry: "
+                            f"{entry_name}"
+                        )
+                    )
+
+                stream.write(
+                    "write "
+                    f"{shlex.quote(str(item))} "
+                    f"/lib/modules/"
+                    f"{entry_name}\n"
+                )
+
+        result = _run(
+            [
+                debugfs,
+                "-w",
+                "-f",
+                commands,
+                output,
+            ],
+            check=False,
+        )
+
+        stderr = result.stderr.decode(
+            errors="replace"
+        )
+
+        if (
+            result.returncode != 0
+            or "Command not found" in stderr
+            or "File not found" in stderr
+            or "No space left" in stderr
+        ):
+            raise TreeForgeKernelCarrierError(
+                f"{name} module-tree patch failed:\n"
+                + stderr[-4000:]
+            )
+
+    #
+    # Apply metadata only to /lib/modules and the newly written
+    # module payload. Do not rewrite /etc or any other preserved
+    # source inode.
+    #
     _apply_ext4_metadata(
         output,
-        carrier_root,
+        staging_root,
         str(
-            geometry["selinux"]
+            geometry[
+                "selinux"
+            ]
         ),
         module_context=(
             str(
@@ -695,42 +902,110 @@ def _realize_dlkm(
             in geometry
             else None
         ),
+        include_root_metadata=False,
     )
+
+    if (
+        output.stat().st_size
+        != filesystem_bytes
+    ):
+        raise TreeForgeKernelCarrierError(
+            f"{name} filesystem size changed "
+            "during module patch"
+        )
+
+    #
+    # Hard preservation gates. A contaminated modules-only source
+    # must fail here rather than becoming the next trusted backup.
+    #
+    required_non_module = [
+        "/etc",
+        "/etc/build.prop",
+        "/etc/fs_config_dirs",
+        "/etc/fs_config_files",
+    ]
+
+    if name == "vendor_dlkm":
+        required_non_module.append(
+            "/etc/init.insmod.tangorpro.cfg"
+        )
+
+    for required_path in required_non_module:
+        probe = _run(
+            [
+                debugfs,
+                "-R",
+                f"stat {required_path}",
+                output,
+            ],
+            check=False,
+        )
+
+        diagnostic = (
+            probe.stdout
+            + probe.stderr
+        ).decode(
+            errors="replace"
+        )
+
+        if (
+            probe.returncode != 0
+            or "File not found" in diagnostic
+            or "not found by ext2_lookup"
+            in diagnostic
+        ):
+            raise TreeForgeKernelCarrierError(
+                f"{name} preserved payload "
+                f"missing: {required_path}"
+            )
 
     if staging_root.exists():
         shutil.rmtree(
             staging_root
         )
 
-    _run(
-        [
-            avbtool,
-            "add_hashtree_footer",
-            "--image",
-            output,
-            "--partition_name",
-            name,
-            "--hash_algorithm",
-            "sha256",
-            "--salt",
-            geometry["salt"],
-        ]
-    )
+    #
+    # Recreate the child hashtree/footer using the source
+    # partition size and source salt. Parent Owner-AVB descriptors
+    # are regenerated later by Pixel Partitioner.
+    #
+    command: list[str | Path] = [
+        avbtool,
+        "add_hashtree_footer",
+        "--image",
+        output,
+        "--partition_name",
+        name,
+        "--partition_size",
+        str(
+            source_partition_bytes
+        ),
+        "--hash_algorithm",
+        "sha256",
+        "--salt",
+        source_salt,
+    ]
 
-    expected_partition = int(
-        geometry[
-            "partition_bytes"
-        ]
+    for key, value in source_properties:
+        command.extend(
+            [
+                "--prop",
+                f"{key}:{value}",
+            ]
+        )
+
+    _run(
+        command
     )
 
     if (
         output.stat().st_size
-        != expected_partition
+        != source_partition_bytes
     ):
         raise TreeForgeKernelCarrierError(
             f"{name} partition size changed: "
             f"{output.stat().st_size} != "
-            f"{expected_partition}"
+            f"{source_partition_bytes}"
         )
 
 
@@ -1204,8 +1479,14 @@ def realize_kernel_carriers(
         "vendor_dlkm",
         "system_dlkm",
     ):
+        source_dlkm = _source_image(
+            input_root,
+            name,
+        )
+
         _realize_dlkm(
             name=name,
+            source=source_dlkm,
             payload_root=payload_root,
             output=(
                 output_root
