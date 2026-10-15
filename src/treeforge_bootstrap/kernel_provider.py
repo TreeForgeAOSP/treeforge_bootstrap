@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import re
 from pathlib import Path
 import shutil
+import subprocess
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -19,9 +23,11 @@ KERNEL_REPOSITORY = (
     "TreeForgeAOSP/treeforge_kernel"
 )
 
-KERNEL_RELEASE_TAG = (
-    "r0.94-v1.0b2"
-)
+#
+# This is a workspace/channel label only.
+# It is NOT a GitHub release tag.
+#
+KERNEL_CHANNEL = "current"
 
 KERNEL_ASSET = "boot.img"
 
@@ -29,42 +35,23 @@ KERNEL_MODULE_PROVIDER_ASSET = (
     "module-provider.json"
 )
 
-KERNEL_MODULE_ARCHIVE_ASSET = (
-    "treeforge-kernel-modules-"
-    "tangorpro-android15-"
-    + KERNEL_RELEASE_TAG
-    + ".tar.zst"
+KERNEL_CHECKSUMS_ASSET = (
+    "SHA256SUMS"
 )
 
-KERNEL_URL = (
-    "https://github.com/"
-    + KERNEL_REPOSITORY
-    + "/releases/download/"
-    + KERNEL_RELEASE_TAG
-    + "/"
-    + KERNEL_ASSET
+KERNEL_CACHE_ROOT = (
+    Path.home()
+    / ".cache"
+    / "treeforge"
+    / "bootstrap-kernel"
 )
 
-EXPECTED_KERNEL_BYTES = 67108864
-
-EXPECTED_KERNEL_SHA256 = (
-    "51f863c0b872ca0f10a8f2d92e82b3"
-    "f465447fff48920fd1fd0e802dd499f27b"
+KERNEL_RELEASE_RE = re.compile(
+    r"r([0-9]+)\.([0-9]+)-"
+    r"v([0-9]+)\.([0-9]+)b([0-9]+)"
 )
 
-EXPECTED_MODULE_PROVIDER_BYTES = 473737
-
-EXPECTED_MODULE_PROVIDER_SHA256 = (
-    "6c600187087fbeb3a41123f9dc5ca596"
-    "dbe9109f2f81706749b5aa447ccbb821"
-)
-
-EXPECTED_MODULE_ARCHIVE_BYTES = 16891974
-
-EXPECTED_MODULE_ARCHIVE_SHA256 = (
-    "1c8aa8caec6b48c5b63831f179e11fab"
-    "4b482cf920c489954397d33df2faf3b3"
-)
+_RESOLVED_RELEASE: dict[str, object] | None = None
 
 SUPPORTED_BASELINE = {
     "vendor_kernel_boot_sha256":
@@ -79,44 +66,6 @@ SUPPORTED_BASELINE = {
         "1daf1af2a01e5cd6d12e84c2b41c08c"
         "45ef949fd0977f0defd835081594cec7e",
 }
-
-_RELEASE_ASSETS = {
-    KERNEL_ASSET: {
-        "bytes": EXPECTED_KERNEL_BYTES,
-        "sha256": EXPECTED_KERNEL_SHA256,
-    },
-    KERNEL_MODULE_PROVIDER_ASSET: {
-        "bytes": EXPECTED_MODULE_PROVIDER_BYTES,
-        "sha256": EXPECTED_MODULE_PROVIDER_SHA256,
-    },
-    KERNEL_MODULE_ARCHIVE_ASSET: {
-        "bytes": EXPECTED_MODULE_ARCHIVE_BYTES,
-        "sha256": EXPECTED_MODULE_ARCHIVE_SHA256,
-    },
-}
-
-KERNEL_CACHE = (
-    Path.home()
-    / ".cache"
-    / "treeforge"
-    / "bootstrap-kernel"
-    / KERNEL_RELEASE_TAG
-)
-
-KERNEL_CACHE_IMAGE = (
-    KERNEL_CACHE
-    / KERNEL_ASSET
-)
-
-KERNEL_CACHE_MODULE_PROVIDER = (
-    KERNEL_CACHE
-    / KERNEL_MODULE_PROVIDER_ASSET
-)
-
-KERNEL_CACHE_MODULE_ARCHIVE = (
-    KERNEL_CACHE
-    / KERNEL_MODULE_ARCHIVE_ASSET
-)
 
 
 _KERNEL_PROVIDER_OVERRIDE: Path | None = None
@@ -453,189 +402,648 @@ def sha256(
     return digest.hexdigest()
 
 
-def _asset_url(
-    asset: str,
-) -> str:
-    return (
-        "https://github.com/"
-        + KERNEL_REPOSITORY
-        + "/releases/download/"
-        + KERNEL_RELEASE_TAG
-        + "/"
-        + asset
+def _github_token(
+) -> str | None:
+    for name in (
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+    ):
+        value = os.environ.get(
+            name,
+            "",
+        ).strip()
+
+        if value:
+            return value
+
+    gh = shutil.which(
+        "gh"
+    )
+
+    if gh is None:
+        return None
+
+    completed = subprocess.run(
+        [
+            gh,
+            "auth",
+            "token",
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+
+    if completed.returncode != 0:
+        return None
+
+    value = completed.stdout.strip()
+
+    return value or None
+
+
+def _github_request(
+    url: str,
+    *,
+    token: str | None,
+    accept: str,
+) -> urllib.request.Request:
+    headers = {
+        "Accept":
+            accept,
+
+        "User-Agent":
+            "TreeForge-Bootstrap/1",
+
+        "X-GitHub-Api-Version":
+            "2022-11-28",
+    }
+
+    if token:
+        headers[
+            "Authorization"
+        ] = f"Bearer {token}"
+
+    return urllib.request.Request(
+        url,
+        headers=headers,
     )
 
 
-def _verify_asset(
-    path: Path,
-    asset: str,
-) -> None:
-    record = _RELEASE_ASSETS.get(
-        asset
+def _release_key(
+    tag: str,
+) -> tuple[int, ...]:
+    match = KERNEL_RELEASE_RE.fullmatch(
+        tag
     )
 
-    if record is None:
+    if match is None:
         raise TreeForgeBootstrapKernelProviderError(
-            "unknown TreeForge kernel release "
-            f"asset: {asset}"
+            "unsupported TreeForge kernel "
+            f"release tag: {tag}"
         )
 
-    if not path.is_file():
-        raise TreeForgeBootstrapKernelProviderError(
-            "TreeForge kernel release asset "
-            f"missing: {path}"
-        )
-
-    size = path.stat().st_size
-
-    if size != record["bytes"]:
-        raise TreeForgeBootstrapKernelProviderError(
-            "TreeForge kernel release asset "
-            f"size changed: {asset}: {size}"
-        )
-
-    actual = sha256(
-        path
-    )
-
-    if actual != record["sha256"]:
-        raise TreeForgeBootstrapKernelProviderError(
-            "TreeForge kernel release asset "
-            f"identity changed: {asset}: {actual}"
-        )
-
-
-def _verify(
-    path: Path,
-) -> None:
-    #
-    # Compatibility wrapper retained for image.py and
-    # existing Bootstrap callers.
-    #
-    _verify_asset(
-        path,
-        KERNEL_ASSET,
+    return tuple(
+        int(value)
+        for value in match.groups()
     )
 
 
-def _download_asset(
-    asset: str,
-) -> Path:
-    KERNEL_CACHE.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
+def _published_release_tags(
+    token: str | None,
+) -> tuple[str, ...]:
+    tags: list[str] = []
 
-    destination = (
-        KERNEL_CACHE
-        / asset
-    )
+    page = 1
 
-    with tempfile.TemporaryDirectory(
-        prefix=".download-",
-        dir=KERNEL_CACHE,
-    ) as raw:
-        temporary = Path(raw)
-
-        downloaded = (
-            temporary
-            / asset
-        )
-
-        request = urllib.request.Request(
-            _asset_url(asset),
-            headers={
-                "User-Agent":
-                    "TreeForge-Bootstrap/1",
-            },
+    while True:
+        url = (
+            "https://api.github.com/repos/"
+            + KERNEL_REPOSITORY
+            + f"/releases?per_page=100&page={page}"
         )
 
         try:
             with urllib.request.urlopen(
-                request,
+                _github_request(
+                    url,
+                    token=token,
+                    accept=(
+                        "application/"
+                        "vnd.github+json"
+                    ),
+                ),
                 timeout=60,
             ) as response:
-                with downloaded.open(
-                    "wb"
-                ) as output:
-                    shutil.copyfileobj(
-                        response,
-                        output,
-                        length=1024 * 1024,
-                    )
+                records = json.load(
+                    response
+                )
+
         except (
             OSError,
             urllib.error.URLError,
-        ) as exc:
+            TimeoutError,
+            json.JSONDecodeError,
+        ) as error:
             raise TreeForgeBootstrapKernelProviderError(
-                "unable to fetch released "
-                "TreeForge kernel asset: "
-                f"{asset}"
-            ) from exc
+                "unable to enumerate published "
+                "TreeForge kernel releases"
+            ) from error
 
-        _verify_asset(
-            downloaded,
-            asset,
-        )
-
-        replacement = (
-            KERNEL_CACHE
-            / (
-                "."
-                + asset
-                + ".new"
+        if not isinstance(
+            records,
+            list,
+        ):
+            raise TreeForgeBootstrapKernelProviderError(
+                "TreeForge kernel release listing "
+                "is not an array"
             )
-        )
 
-        if replacement.exists():
-            replacement.unlink()
+        for record in records:
+            if not isinstance(
+                record,
+                dict,
+            ):
+                continue
 
-        shutil.copyfile(
-            downloaded,
-            replacement,
-        )
+            if (
+                record.get("draft") is True
+                or record.get(
+                    "prerelease"
+                ) is True
+            ):
+                continue
 
-        _verify_asset(
-            replacement,
-            asset,
-        )
+            tag = record.get(
+                "tag_name"
+            )
 
-        replacement.replace(
-            destination
-        )
+            if (
+                isinstance(tag, str)
+                and KERNEL_RELEASE_RE.fullmatch(
+                    tag
+                )
+            ):
+                tags.append(
+                    tag
+                )
 
-    _verify_asset(
-        destination,
-        asset,
+        if len(records) < 100:
+            break
+
+        page += 1
+
+    releases = sorted(
+        set(tags),
+        key=_release_key,
+        reverse=True,
     )
 
-    return destination
+    if not releases:
+        raise TreeForgeBootstrapKernelProviderError(
+            "TreeForge kernel has no supported "
+            "published releases"
+        )
+
+    return tuple(
+        releases
+    )
 
 
-def _ensure_asset(
-    asset: str,
-) -> Path:
-    path = (
-        KERNEL_CACHE
-        / asset
+def _release_assets(
+    tag: str,
+    token: str | None,
+) -> dict[str, str]:
+    encoded = urllib.parse.quote(
+        tag,
+        safe="",
+    )
+
+    url = (
+        "https://api.github.com/repos/"
+        + KERNEL_REPOSITORY
+        + "/releases/tags/"
+        + encoded
     )
 
     try:
-        _verify_asset(
-            path,
-            asset,
+        with urllib.request.urlopen(
+            _github_request(
+                url,
+                token=token,
+                accept=(
+                    "application/"
+                    "vnd.github+json"
+                ),
+            ),
+            timeout=60,
+        ) as response:
+            release = json.load(
+                response
+            )
+
+    except (
+        OSError,
+        urllib.error.URLError,
+        TimeoutError,
+        json.JSONDecodeError,
+    ) as error:
+        raise TreeForgeBootstrapKernelProviderError(
+            "unable to inspect TreeForge "
+            f"kernel release: {tag}"
+        ) from error
+
+    if not isinstance(
+        release,
+        dict,
+    ):
+        raise TreeForgeBootstrapKernelProviderError(
+            "TreeForge kernel release metadata "
+            "is not an object"
         )
 
-        return path
+    result: dict[str, str] = {}
 
-    except TreeForgeBootstrapKernelProviderError:
-        return _download_asset(
-            asset
+    for record in release.get(
+        "assets",
+        [],
+    ):
+        if not isinstance(
+            record,
+            dict,
+        ):
+            continue
+
+        name = record.get(
+            "name"
         )
+
+        download = record.get(
+            "browser_download_url"
+        )
+
+        if (
+            isinstance(name, str)
+            and isinstance(
+                download,
+                str,
+            )
+        ):
+            result[name] = download
+
+    return result
+
+
+def _download_release_asset(
+    url: str,
+    destination: Path,
+    *,
+    token: str | None,
+) -> None:
+    try:
+        with urllib.request.urlopen(
+            _github_request(
+                url,
+                token=token,
+                accept=(
+                    "application/"
+                    "octet-stream"
+                ),
+            ),
+            timeout=120,
+        ) as response:
+            with destination.open(
+                "wb"
+            ) as output:
+                shutil.copyfileobj(
+                    response,
+                    output,
+                    length=1024 * 1024,
+                )
+
+    except (
+        OSError,
+        urllib.error.URLError,
+        TimeoutError,
+    ) as error:
+        raise TreeForgeBootstrapKernelProviderError(
+            "unable to download TreeForge "
+            "kernel release asset: "
+            f"{destination.name}"
+        ) from error
+
+
+def _parse_sums(
+    path: Path,
+) -> dict[str, str]:
+    if not path.is_file():
+        raise TreeForgeBootstrapKernelProviderError(
+            "TreeForge kernel SHA256SUMS "
+            "is missing"
+        )
+
+    result: dict[str, str] = {}
+
+    for raw in path.read_text(
+        encoding="utf-8"
+    ).splitlines():
+        line = raw.strip()
+
+        if not line:
+            continue
+
+        fields = line.split(
+            None,
+            1,
+        )
+
+        if len(fields) != 2:
+            raise TreeForgeBootstrapKernelProviderError(
+                "invalid TreeForge kernel "
+                "SHA256SUMS entry"
+            )
+
+        digest, name = fields
+
+        name = name.strip()
+
+        if name.startswith("*"):
+            name = name[1:]
+
+        if (
+            len(digest) != 64
+            or any(
+                character
+                not in
+                "0123456789abcdef"
+                for character
+                in digest.lower()
+            )
+        ):
+            raise TreeForgeBootstrapKernelProviderError(
+                "invalid TreeForge kernel "
+                f"SHA256 digest: {name}"
+            )
+
+        result[name] = (
+            digest.lower()
+        )
+
+    return result
+
+
+def _kernel_module_archive_name(
+    release: str,
+) -> str:
+    return (
+        "treeforge-kernel-modules-"
+        "tangorpro-android15-"
+        + release
+        + ".tar.zst"
+    )
+
+
+def _verify_release_root(
+    root: Path,
+    *,
+    expected_release: str,
+) -> dict[str, object]:
+    archive_name = (
+        _kernel_module_archive_name(
+            expected_release
+        )
+    )
+
+    required = {
+        KERNEL_ASSET,
+        KERNEL_MODULE_PROVIDER_ASSET,
+        KERNEL_CHECKSUMS_ASSET,
+        archive_name,
+    }
+
+    for name in required:
+        path = root / name
+
+        if not path.is_file():
+            raise TreeForgeBootstrapKernelProviderError(
+                "TreeForge kernel release "
+                f"asset missing: {name}"
+            )
+
+    sums = _parse_sums(
+        root
+        / KERNEL_CHECKSUMS_ASSET
+    )
+
+    for name in (
+        KERNEL_ASSET,
+        KERNEL_MODULE_PROVIDER_ASSET,
+        archive_name,
+    ):
+        expected = sums.get(
+            name
+        )
+
+        if expected is None:
+            raise TreeForgeBootstrapKernelProviderError(
+                "TreeForge kernel SHA256SUMS "
+                f"does not contain: {name}"
+            )
+
+        actual = sha256(
+            root / name
+        )
+
+        if actual != expected:
+            raise TreeForgeBootstrapKernelProviderError(
+                "TreeForge kernel release "
+                f"checksum mismatch: {name}: "
+                f"{actual} != {expected}"
+            )
+
+    boot_sha256 = sums[
+        KERNEL_ASSET
+    ]
+
+    metadata = _verify_provider_contract(
+        root
+        / KERNEL_MODULE_PROVIDER_ASSET,
+        expected_release=(
+            expected_release
+        ),
+        expected_boot_sha256=(
+            boot_sha256
+        ),
+    )
+
+    return {
+        "release":
+            expected_release,
+
+        "boot":
+            root / KERNEL_ASSET,
+
+        "manifest":
+            root
+            / KERNEL_MODULE_PROVIDER_ASSET,
+
+        "archive":
+            root / archive_name,
+
+        "metadata":
+            metadata,
+
+        "root":
+            root,
+    }
+
+
+def _materialize_release_provider(
+) -> dict[str, object]:
+    global _RESOLVED_RELEASE
+
+    if _RESOLVED_RELEASE is not None:
+        root = Path(
+            _RESOLVED_RELEASE[
+                "root"
+            ]
+        )
+
+        release = str(
+            _RESOLVED_RELEASE[
+                "release"
+            ]
+        )
+
+        _RESOLVED_RELEASE = (
+            _verify_release_root(
+                root,
+                expected_release=release,
+            )
+        )
+
+        return _RESOLVED_RELEASE
+
+    token = _github_token()
+
+    release = (
+        _published_release_tags(
+            token
+        )[0]
+    )
+
+    print(
+        "[provider:kernel] "
+        "RESOLVE latest published release: "
+        + release
+    )
+
+    cache = (
+        KERNEL_CACHE_ROOT
+        / release
+    )
+
+    if cache.is_dir():
+        try:
+            result = (
+                _verify_release_root(
+                    cache,
+                    expected_release=release,
+                )
+            )
+
+            print(
+                "[provider:kernel] "
+                "VERIFY cache: "
+                + str(cache)
+            )
+
+            _RESOLVED_RELEASE = result
+
+            return result
+
+        except (
+            TreeForgeBootstrapKernelProviderError
+        ):
+            shutil.rmtree(
+                cache
+            )
+
+    assets = _release_assets(
+        release,
+        token,
+    )
+
+    archive_name = (
+        _kernel_module_archive_name(
+            release
+        )
+    )
+
+    required = {
+        KERNEL_ASSET,
+        KERNEL_MODULE_PROVIDER_ASSET,
+        KERNEL_CHECKSUMS_ASSET,
+        archive_name,
+    }
+
+    missing = sorted(
+        required
+        - set(assets)
+    )
+
+    if missing:
+        raise TreeForgeBootstrapKernelProviderError(
+            "TreeForge kernel release "
+            f"{release} is missing assets: "
+            f"{missing!r}"
+        )
+
+    KERNEL_CACHE_ROOT.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    with tempfile.TemporaryDirectory(
+        prefix=(
+            "."
+            + release
+            + ".partial-"
+        ),
+        dir=KERNEL_CACHE_ROOT,
+    ) as raw:
+        temporary = Path(
+            raw
+        )
+
+        for name in sorted(
+            required
+        ):
+            _download_release_asset(
+                assets[name],
+                temporary / name,
+                token=token,
+            )
+
+        _verify_release_root(
+            temporary,
+            expected_release=release,
+        )
+
+        if cache.exists():
+            shutil.rmtree(
+                cache
+            )
+
+        shutil.copytree(
+            temporary,
+            cache,
+        )
+
+    result = (
+        _verify_release_root(
+            cache,
+            expected_release=release,
+        )
+    )
+
+    print(
+        "[provider:kernel] "
+        "MATERIALIZE: "
+        + str(cache)
+    )
+
+    _RESOLVED_RELEASE = result
+
+    return result
 
 
 def _verify_provider_contract(
     path: Path,
+    *,
+    expected_release: str,
+    expected_boot_sha256: str,
 ) -> dict[str, object]:
     try:
         metadata = json.loads(
@@ -647,15 +1055,21 @@ def _verify_provider_contract(
         OSError,
         UnicodeDecodeError,
         json.JSONDecodeError,
-    ) as exc:
+    ) as error:
         raise TreeForgeBootstrapKernelProviderError(
             "TreeForge kernel module provider "
             "metadata is unreadable"
-        ) from exc
+        ) from error
+
+    if not isinstance(metadata, dict):
+        raise TreeForgeBootstrapKernelProviderError(
+            "TreeForge kernel provider metadata "
+            "is not an object"
+        )
 
     if (
         metadata.get("schema")
-        != "treeforge.kernel.module-provider.v1"
+        != "treeforge.kernel.module-provider.v2"
     ):
         raise TreeForgeBootstrapKernelProviderError(
             "TreeForge kernel provider schema changed"
@@ -663,10 +1077,22 @@ def _verify_provider_contract(
 
     if (
         metadata.get("release")
-        != KERNEL_RELEASE_TAG
+        != expected_release
     ):
         raise TreeForgeBootstrapKernelProviderError(
             "TreeForge kernel provider release changed"
+        )
+
+    if (
+        metadata.get("target")
+        != "tangorpro"
+        or metadata.get("android_base")
+        != "android15"
+        or metadata.get("boot_sha256")
+        != expected_boot_sha256
+    ):
+        raise TreeForgeBootstrapKernelProviderError(
+            "TreeForge kernel provider identity changed"
         )
 
     reconstruction = metadata.get(
@@ -682,98 +1108,116 @@ def _verify_provider_contract(
             "contract is missing"
         )
 
-    if (
-        reconstruction.get(
-            "module_tree_policy"
-        )
-        != "replace_exact"
-        or reconstruction.get(
-            "regenerate_module_metadata"
-        )
-        is not True
-        or reconstruction.get(
-            "partition_images_distributed"
-        )
-        is not False
-        or reconstruction.get(
-            "owner_avb"
-        )
-        != "local-device-owner-resign"
-    ):
-        raise TreeForgeBootstrapKernelProviderError(
-            "TreeForge kernel reconstruction "
-            "policy changed"
-        )
+    expected_reconstruction = {
+        "carrier_source":
+            "current-installed",
+        "carrier_policy":
+            "patch-current",
+        "non_module_payload":
+            "preserve-exact",
+        "module_tree_policy":
+            "replace-exact",
+        "regenerate_module_metadata":
+            True,
+        "partition_images_distributed":
+            False,
+        "owner_avb":
+            "local-device-owner-resign",
+    }
 
-    vendor_kernel_boot = (
-        reconstruction.get(
-            "vendor_kernel_boot"
-        )
+    for key, expected in (
+        expected_reconstruction.items()
+    ):
+        if reconstruction.get(key) != expected:
+            raise TreeForgeBootstrapKernelProviderError(
+                "TreeForge kernel reconstruction "
+                f"policy changed: {key}"
+            )
+
+    carrier_policy = reconstruction.get(
+        "carriers"
     )
 
     if (
-        not isinstance(
-            vendor_kernel_boot,
-            dict,
+        not isinstance(carrier_policy, dict)
+        or set(carrier_policy)
+        != {
+            "vendor_kernel_boot",
+            "vendor_dlkm",
+            "system_dlkm",
+        }
+    ):
+        raise TreeForgeBootstrapKernelProviderError(
+            "TreeForge kernel carrier policy set changed"
         )
-        or vendor_kernel_boot.get(
-            "source"
+
+    expected_dlkm = {
+        "filesystem_structure":
+            "preserve",
+        "module_tree_policy":
+            "replace-exact",
+        "non_module_payload":
+            "preserve-exact",
+    }
+
+    for name in (
+        "vendor_dlkm",
+        "system_dlkm",
+    ):
+        record = carrier_policy.get(name)
+
+        if (
+            not isinstance(record, dict)
+            or record != expected_dlkm
+        ):
+            raise TreeForgeBootstrapKernelProviderError(
+                "TreeForge kernel carrier "
+                f"policy changed: {name}"
+            )
+
+    expected_vendor_kernel_boot = {
+        "image_structure":
+            "preserve",
+        "module_tree_policy":
+            "replace-exact",
+        "non_module_payload":
+            "preserve-exact",
+        "ramdisk_compression":
+            "lz4",
+    }
+
+    if (
+        carrier_policy.get(
+            "vendor_kernel_boot"
         )
-        != "current-installed"
-        or vendor_kernel_boot.get(
-            "image_structure"
-        )
-        != "preserve"
-        or vendor_kernel_boot.get(
-            "module_tree_policy"
-        )
-        != "replace_exact"
-        or vendor_kernel_boot.get(
-            "ramdisk_compression"
-        )
-        != "lz4"
-        or vendor_kernel_boot.get(
-            "rebuild"
-        )
-        is not True
+        != expected_vendor_kernel_boot
     ):
         raise TreeForgeBootstrapKernelProviderError(
             "TreeForge vendor_kernel_boot "
-            "reconstruction policy changed"
+            "carrier policy changed"
         )
 
     baseline = metadata.get(
         "supported_baseline"
     )
 
-    if not isinstance(
-        baseline,
-        dict,
+    if (
+        not isinstance(baseline, dict)
+        or baseline.get("type")
+        != "pixel-partitioner-aosp-backup"
     ):
         raise TreeForgeBootstrapKernelProviderError(
             "TreeForge kernel source baseline "
             "is missing"
         )
 
-    if (
-        baseline.get("type")
-        != "pixel-partitioner-aosp-backup"
-    ):
-        raise TreeForgeBootstrapKernelProviderError(
-            "TreeForge kernel source baseline "
-            "type changed"
-        )
-
-    for key, expected in (
+    for name, expected in (
         SUPPORTED_BASELINE.items()
     ):
-        if (
-            baseline.get(key)
-            != expected
-        ):
+        if baseline.get(name) != expected:
             raise TreeForgeBootstrapKernelProviderError(
                 "TreeForge kernel source baseline "
-                f"changed: {key}"
+                f"changed: {name}"
             )
 
     carriers = metadata.get(
@@ -781,10 +1225,7 @@ def _verify_provider_contract(
     )
 
     if (
-        not isinstance(
-            carriers,
-            dict,
-        )
+        not isinstance(carriers, dict)
         or set(carriers)
         != {
             "vendor_kernel_boot",
@@ -793,13 +1234,14 @@ def _verify_provider_contract(
         }
     ):
         raise TreeForgeBootstrapKernelProviderError(
-            "TreeForge kernel carrier set changed"
+            "TreeForge kernel carrier payload "
+            "set changed"
         )
 
     return metadata
 
-
-def ensure_bootstrap_kernel() -> Path:
+def ensure_bootstrap_kernel(
+) -> Path:
     if _KERNEL_PROVIDER_OVERRIDE is not None:
         provider = (
             _verify_development_provider_contract(
@@ -807,10 +1249,16 @@ def ensure_bootstrap_kernel() -> Path:
             )
         )
 
-        return provider["boot"]
+        return Path(
+            provider["boot"]
+        )
 
-    return _ensure_asset(
-        KERNEL_ASSET
+    provider = (
+        _materialize_release_provider()
+    )
+
+    return Path(
+        provider["boot"]
     )
 
 
@@ -823,37 +1271,17 @@ def ensure_kernel_reconstruction_provider(
             )
         )
 
-    boot = _ensure_asset(
-        KERNEL_ASSET
+    return (
+        _materialize_release_provider()
     )
 
-    manifest = _ensure_asset(
-        KERNEL_MODULE_PROVIDER_ASSET
+
+def resolved_kernel_release(
+) -> str:
+    provider = (
+        ensure_kernel_reconstruction_provider()
     )
 
-    archive = _ensure_asset(
-        KERNEL_MODULE_ARCHIVE_ASSET
+    return str(
+        provider["release"]
     )
-
-    metadata = (
-        _verify_provider_contract(
-            manifest
-        )
-    )
-
-    return {
-        "release":
-            KERNEL_RELEASE_TAG,
-
-        "boot":
-            boot,
-
-        "manifest":
-            manifest,
-
-        "archive":
-            archive,
-
-        "metadata":
-            metadata,
-    }

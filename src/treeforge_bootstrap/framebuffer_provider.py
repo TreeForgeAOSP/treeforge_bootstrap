@@ -21,7 +21,7 @@ class TreeForgeFramebufferProviderError(RuntimeError):
 
 PROVIDER_NAME = "treeforge_bootstrap_framebuffer"
 PROVIDER_ABI = 1
-PROVIDER_REPOSITORY = "TreeForgeDEV/treeforge_bootstrap_framebuffer"
+PROVIDER_REPOSITORY = "TreeForgeAOSP/treeforge_bootstrap_framebuffer"
 PROVIDER_ARCHIVE_PREFIX = PROVIDER_NAME
 PROVIDER_CACHE_ROOT = (
     Path.home()
@@ -98,17 +98,27 @@ def _github_token() -> str | None:
     return value or None
 
 
-def _github_request(url: str, *, token: str, accept: str) -> urllib.request.Request:
+def _github_request(
+    url: str,
+    *,
+    token: str | None,
+    accept: str,
+) -> urllib.request.Request:
+    headers = {
+        "Accept": accept,
+        "User-Agent": "TreeForge-Bootstrap/1",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    if token:
+        headers["Authorization"] = (
+            f"Bearer {token}"
+        )
+
     return urllib.request.Request(
         url,
-        headers={
-            "Accept": accept,
-            "Authorization": f"Bearer {token}",
-            "User-Agent": "TreeForge-Bootstrap/1",
-            "X-GitHub-Api-Version": "2022-11-28",
-        },
+        headers=headers,
     )
-
 
 def _beta_number(tag: str) -> int:
     match = RELEASE_RE.fullmatch(tag)
@@ -470,12 +480,6 @@ def _materialize_release_provider() -> tuple[Path, str]:
         return root, version
 
     token = _github_token()
-    if token is None:
-        raise TreeForgeFramebufferProviderError(
-            "TreeForge framebuffer provider is private. Authenticate with "
-            "`gh auth login`, or set GH_TOKEN / GITHUB_TOKEN."
-        )
-
     version = _published_release_tags(token)[0]
     print(
         "[provider:treeforge_bootstrap_framebuffer] "

@@ -1,4 +1,4 @@
-# TreeForge Bootstrap — v1.0b7
+# TreeForge Bootstrap — v1.0b1
 
 First-stage boot environment for TreeForge on Pixel Tablet (`tangorpro`).
 

@@ -24,7 +24,7 @@ class TreeForgeKernelCarrierError(RuntimeError):
 
 
 #
-# r0.94-v1.0b2 accepted build geometry.
+# r0.94-v1.0b1 accepted build geometry.
 #
 # These are reconstruction parameters, not distributed
 # partition-image identities.

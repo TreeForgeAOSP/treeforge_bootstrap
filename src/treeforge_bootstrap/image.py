@@ -10,12 +10,10 @@ import subprocess
 from .host_providers import ensure_host_tool
 
 from .kernel_provider import (
-    EXPECTED_KERNEL_BYTES,
-    EXPECTED_KERNEL_SHA256,
     KERNEL_ASSET,
-    KERNEL_RELEASE_TAG,
     KERNEL_REPOSITORY,
     ensure_bootstrap_kernel,
+    resolved_kernel_release,
 )
 
 from .paths import (
@@ -862,7 +860,7 @@ def _expected_metadata(
                 KERNEL_REPOSITORY,
 
             "release_tag":
-                KERNEL_RELEASE_TAG,
+                resolved_kernel_release(),
 
             "asset":
                 KERNEL_ASSET,
@@ -1424,7 +1422,7 @@ def verify_image(
 
     #
     # Verify that changing the boot signer did not alter the
-    # published r0.94-v1.0b2 boot payload.
+    # resolved published kernel boot payload.
     #
     from .owner_family import (
         OwnerFamilyError,

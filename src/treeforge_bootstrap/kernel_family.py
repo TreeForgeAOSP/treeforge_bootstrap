@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 
 from .kernel_provider import (
-    KERNEL_RELEASE_TAG,
+    KERNEL_CHANNEL,
     TreeForgeBootstrapKernelProviderError,
     ensure_kernel_reconstruction_provider,
 )
@@ -23,7 +23,7 @@ CACHE_ROOT = (
     / ".cache"
     / "treeforge"
     / "bootstrap-kernel"
-    / KERNEL_RELEASE_TAG
+    / KERNEL_CHANNEL
     / "reconstruction"
 )
 
