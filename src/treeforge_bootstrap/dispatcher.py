@@ -286,7 +286,7 @@ int memcmp(
  * FD99 remains the established Bootstrap dispatcher/runtime
  * transition descriptor.
  *
- * FD98 independently retains the TreeForge vendor_boot carrier
+ * When present, FD98 retains the TreeForge vendor_boot carrier
  * across Android FirstStageMain / FreeRamdisk.
  */
 #define TREEFORGE_BOOTSTRAP_VENDOR_BOOT_CARRIER_FD 98
@@ -8320,6 +8320,23 @@ static int tfb_carrier_publish_file(
  * Owner AVB graph. SHA-256 validation of the container table and
  * entry payload remains a separate dispatcher hardening step.
  */
+static int tfb_vendor_boot_carrier_fd_available(
+    void
+) {
+    unsigned char probe = 0;
+
+    return (
+        tfb_syscall3(
+            SYS_READ,
+            TREEFORGE_BOOTSTRAP_VENDOR_BOOT_CARRIER_FD,
+            (long) &probe,
+            0
+        )
+        == 0
+    );
+}
+
+
 static int tfb_publish_vendor_boot_carrier_proof(
     void
 ) {
@@ -8607,20 +8624,28 @@ __TREEFORGE_MENU_CONTROLLER_SOURCE__static void tfb_main(
             | O_NONBLOCK
         );
 
-        int vendor_boot_carrier_proof =
-            tfb_publish_vendor_boot_carrier_proof();
+        if (
+            tfb_vendor_boot_carrier_fd_available()
+        ) {
+            int vendor_boot_carrier_proof =
+                tfb_publish_vendor_boot_carrier_proof();
 
-        tfb_close(
-            TREEFORGE_BOOTSTRAP_VENDOR_BOOT_CARRIER_FD
-        );
-
-        if (vendor_boot_carrier_proof) {
-            tfb_log(
-                "vendor-boot-carrier-proof=pass"
+            tfb_close(
+                TREEFORGE_BOOTSTRAP_VENDOR_BOOT_CARRIER_FD
             );
+
+            if (vendor_boot_carrier_proof) {
+                tfb_log(
+                    "vendor-boot-carrier-proof=pass"
+                );
+            } else {
+                tfb_log(
+                    "vendor-boot-carrier-proof=failed"
+                );
+            }
         } else {
             tfb_log(
-                "vendor-boot-carrier-proof=failed"
+                "vendor-boot-carrier=absent"
             );
         }
 
@@ -8694,8 +8719,8 @@ __TREEFORGE_MENU_CONTROLLER_SOURCE__static void tfb_main(
      * FD99 carries this dispatcher and the appended TreeForge Bootstrap
      * runtime bundle through Google's proven FirstStageMain boundary.
      *
-     * FD98 independently carries the vendor_boot carrier so its open
-     * file description survives FreeRamdisk.
+     * When an explicit transaction carrier exists, FD98 carries its
+     * open file description across FreeRamdisk.
      */
     long self_fd = tfb_open(
         "/init",
@@ -8737,23 +8762,26 @@ __TREEFORGE_MENU_CONTROLLER_SOURCE__static void tfb_main(
     /*
      * TFB_VENDOR_BOOT_CARRIER_ABI_V1
      *
-     * Open the vendor_boot carrier while the original ramdisk
-     * namespace is still visible, then retain its file description
-     * independently on FD98.
+     * If an explicit transaction carrier exists, open it while the
+     * original ramdisk namespace is still visible and retain its
+     * file description independently on FD98.
      */
+    /*
+     * FD98 is reserved by Bootstrap. Close any unrelated inherited
+     * descriptor before optionally retaining the transaction carrier.
+     */
+    tfb_close(
+        TREEFORGE_BOOTSTRAP_VENDOR_BOOT_CARRIER_FD
+    );
+
     long vendor_boot_carrier_fd = tfb_open(
         TFB_VENDOR_BOOT_CARRIER_PATH,
         O_RDONLY
     );
 
-    if (vendor_boot_carrier_fd < 0) {
-        tfb_transition_failure(
-            "vendor-boot-carrier-open"
-        );
-    }
-
     if (
-        vendor_boot_carrier_fd
+        vendor_boot_carrier_fd >= 0
+        && vendor_boot_carrier_fd
         != TREEFORGE_BOOTSTRAP_VENDOR_BOOT_CARRIER_FD
     ) {
         long carrier_duplicated =

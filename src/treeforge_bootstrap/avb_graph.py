@@ -2344,23 +2344,27 @@ def realize_family(
         )
     )
 
-    vendor_boot_carrier_work = (
-        REALIZED_WORK
-        / ".vendor-boot-carrier"
-    )
+    vendor_boot_carrier_work = None
+    vendor_boot_carrier = None
 
-    vendor_boot_carrier = (
-        _realize_vendor_boot_carrier_for_family(
-            source=source_images[
-                "vendor_boot"
-            ],
-            output=(
-                vendor_boot_carrier_work
-                / "vendor_boot.img"
-            ),
-            transaction_request=transaction_request,
+    if transaction_request is not None:
+        vendor_boot_carrier_work = (
+            REALIZED_WORK
+            / ".vendor-boot-carrier"
         )
-    )
+
+        vendor_boot_carrier = (
+            _realize_vendor_boot_carrier_for_family(
+                source=source_images[
+                    "vendor_boot"
+                ],
+                output=(
+                    vendor_boot_carrier_work
+                    / "vendor_boot.img"
+                ),
+                transaction_request=transaction_request,
+            )
+        )
 
     realized_images: dict[
         str,
@@ -2385,7 +2389,10 @@ def realize_family(
                 destination,
             )
 
-        elif name == "vendor_boot":
+        elif (
+            name == "vendor_boot"
+            and vendor_boot_carrier is not None
+        ):
             _copy_generated(
                 vendor_boot_carrier,
                 destination,
@@ -2412,7 +2419,10 @@ def realize_family(
             kernel_carrier_work
         )
 
-    if vendor_boot_carrier_work.exists():
+    if (
+        vendor_boot_carrier_work is not None
+        and vendor_boot_carrier_work.exists()
+    ):
         shutil.rmtree(
             vendor_boot_carrier_work
         )
@@ -2484,13 +2494,17 @@ def realize_family(
     allowed_changed = {
         "boot",
         "init_boot",
-        "vendor_boot",
         "vendor_kernel_boot",
         "vendor_dlkm",
         "system_dlkm",
         "vbmeta_system",
         "vbmeta",
     }
+
+    if transaction_request is not None:
+        allowed_changed.add(
+            "vendor_boot"
+        )
 
     _verify_passthrough_identity(
         source_images,
@@ -2625,7 +2639,10 @@ def realize_family(
                 else "bootstrap-runtime"
             )
 
-        elif name == "vendor_boot":
+        elif (
+            name == "vendor_boot"
+            and transaction_request is not None
+        ):
             role = "bootstrap-vendor-boot-carrier"
 
         elif name in kernel_carriers:
