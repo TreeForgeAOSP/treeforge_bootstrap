@@ -1,4 +1,4 @@
-# TreeForge Bootstrap — v1.0b1
+# TreeForge Bootstrap — v1.0b2
 
 First-stage boot environment for TreeForge on Pixel Tablet (`tangorpro`).
 
@@ -23,3 +23,21 @@ Release promotes the exact clean runtime and realizer from `out/development-prov
 Installation-specific signed images are reconstructed downstream with the existing Owner AVB identity.
 
 `VERSION` is authoritative.
+
+## Transaction ABI v2
+
+Bootstrap `v1.0b2` adds the Bootstrap consumer for TreeForge Transaction ABI v2.
+
+The initial operation is `proof`. After Android stages a canonical
+`consumer=bootstrap` request under `/metadata/treeforge-bootstrap`, Bootstrap
+intercepts it before the normal Boot Manager path, atomically claims
+`pending -> running`, publishes an Android continuation as
+`running -> result`, and returns directly through the existing Android Slot-A
+`selinux_setup` handoff.
+
+A lone `running` state is never replayed. Stale temporary state, malformed
+records, mixed ownership, and unsupported Bootstrap operations fail closed.
+Android-side transactiond owns continuation reconciliation and the final
+terminal result.
+
+The Menu provider is not part of the transaction state machine.

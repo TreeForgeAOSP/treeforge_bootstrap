@@ -645,6 +645,8 @@ def _validate_menu(
         b"TREEFORGE_MENU_PROFILE_V1",
         b"/dev/treeforge_bootstrap_fb",
         b"treeforge-bootstrap-adb-service",
+        b"/metadata/treeforge-bootstrap/transaction-v2.pending",
+        b"proof_bootstrap_pass",
     )
 
     for marker in required:

@@ -252,6 +252,7 @@ int memcmp(
 #define SYS_READ 63
 #define SYS_WRITE 64
 #define SYS_SYNC 81
+#define SYS_FSYNC 82
 #define SYS_EXIT 93
 #define SYS_NANOSLEEP 101
 #define SYS_REBOOT 142
@@ -2421,6 +2422,15 @@ static const char *tfb_transition_failure_display_reason(
         )
     ) {
         return "ANDROID SLOT A EXEC";
+    }
+
+    if (
+        tfb_string_equal(
+            reason,
+            "transaction-v2-error"
+        )
+    ) {
+        return "TRANSACTION V2 ERROR";
     }
 
     return "UNMAPPED FAILURE REASON";
@@ -8581,6 +8591,1040 @@ static int tfb_publish_vendor_boot_carrier_proof(
 }
 
 
+
+/*
+ * ================================================================
+ * TFB_TRANSACTION_V2_BOOTSTRAP_R1
+ * ================================================================
+ *
+ * Bootstrap-owned Transaction ABI v2 execution.
+ *
+ * Durable state:
+ *
+ *   /metadata/treeforge-bootstrap/transaction-v2.pending
+ *   /metadata/treeforge-bootstrap/transaction-v2.pending.tmp
+ *   /metadata/treeforge-bootstrap/transaction-v2.running
+ *   /metadata/treeforge-bootstrap/transaction-v2.result
+ *   /metadata/treeforge-bootstrap/transaction-v2.result.tmp
+ *
+ * R1 accepts exactly the Android-origin Bootstrap proof request.
+ *
+ * Normal path:
+ *
+ *   pending -> running -> result/continuation -> Android A
+ *
+ * Crash recovery:
+ *
+ *   running alone
+ *       recovery-required; never replay
+ *
+ *   running + matching continuation result
+ *       retire running and return to Android
+ *
+ *   matching continuation result alone
+ *       return to Android without replay
+ *
+ * Stale temporary files, malformed records, mixed live slots,
+ * ownership violations, or unsupported operations fail closed.
+ *
+ * No Menu API owns transaction state.
+ * No Pixel Partitioner runtime participation.
+ * No transactiond socket access.
+ * No shell execution.
+ */
+
+#define TFB_TRANSACTION_V2_TEXT_MAX 1024
+#define TFB_TRANSACTION_V2_ID_LENGTH 64
+#define TFB_TRANSACTION_V2_ENOENT 2
+
+static const char
+tfb_transaction_v2_pending_path[] =
+    "/metadata/treeforge-bootstrap/"
+    "transaction-v2.pending";
+
+static const char
+tfb_transaction_v2_pending_temp_path[] =
+    "/metadata/treeforge-bootstrap/"
+    "transaction-v2.pending.tmp";
+
+static const char
+tfb_transaction_v2_running_path[] =
+    "/metadata/treeforge-bootstrap/"
+    "transaction-v2.running";
+
+static const char
+tfb_transaction_v2_result_path[] =
+    "/metadata/treeforge-bootstrap/"
+    "transaction-v2.result";
+
+static const char
+tfb_transaction_v2_result_temp_path[] =
+    "/metadata/treeforge-bootstrap/"
+    "transaction-v2.result.tmp";
+
+
+enum tfb_transaction_v2_file_status {
+    TFB_TX_FILE_MISSING = 0,
+    TFB_TX_FILE_VALID = 1,
+    TFB_TX_FILE_INVALID = 2,
+    TFB_TX_FILE_ERROR = 3,
+};
+
+
+static int tfb_transaction_v2_lower_hex(
+    char value
+) {
+    return (
+        (
+            value >= '0'
+            && value <= '9'
+        )
+        || (
+            value >= 'a'
+            && value <= 'f'
+        )
+    );
+}
+
+
+static int tfb_transaction_v2_match_literal(
+    const char **cursor,
+    const char *literal
+) {
+    if (
+        !cursor
+        || !*cursor
+        || !literal
+    ) {
+        return 0;
+    }
+
+    while (*literal != '\0') {
+        if (**cursor != *literal) {
+            return 0;
+        }
+
+        (*cursor)++;
+        literal++;
+    }
+
+    return 1;
+}
+
+
+static int tfb_transaction_v2_parse_id(
+    const char **cursor,
+    char id[
+        TFB_TRANSACTION_V2_ID_LENGTH
+        + 1
+    ]
+) {
+    if (
+        !cursor
+        || !*cursor
+        || !id
+    ) {
+        return 0;
+    }
+
+    for (
+        usize index = 0;
+        index
+            < TFB_TRANSACTION_V2_ID_LENGTH;
+        index++
+    ) {
+        char value = (*cursor)[index];
+
+        if (
+            !tfb_transaction_v2_lower_hex(
+                value
+            )
+        ) {
+            return 0;
+        }
+
+        id[index] = value;
+    }
+
+    id[
+        TFB_TRANSACTION_V2_ID_LENGTH
+    ] = '\0';
+
+    *cursor +=
+        TFB_TRANSACTION_V2_ID_LENGTH;
+
+    return 1;
+}
+
+
+static int
+tfb_transaction_v2_parse_proof_request(
+    const char *text,
+    char id[
+        TFB_TRANSACTION_V2_ID_LENGTH
+        + 1
+    ]
+) {
+    if (
+        !text
+        || !id
+    ) {
+        return 0;
+    }
+
+    const char *cursor = text;
+
+    if (
+        !tfb_transaction_v2_match_literal(
+            &cursor,
+            "TREEFORGE_TRANSACTION_V2\n"
+            "id="
+        )
+        || !tfb_transaction_v2_parse_id(
+            &cursor,
+            id
+        )
+        || !tfb_transaction_v2_match_literal(
+            &cursor,
+            "\n"
+            "step=0\n"
+            "origin=android\n"
+            "consumer=bootstrap\n"
+            "operation=proof\n"
+            "phase=request\n"
+            "payload_type=none\n"
+            "payload_ref=-\n"
+            "payload_sha256=-\n"
+            "target=none\n"
+            "return_target=android_a\n"
+            "status=ready\n"
+            "result=-\n"
+        )
+    ) {
+        return 0;
+    }
+
+    return *cursor == '\0';
+}
+
+
+static int
+tfb_transaction_v2_parse_proof_continuation(
+    const char *text,
+    char id[
+        TFB_TRANSACTION_V2_ID_LENGTH
+        + 1
+    ]
+) {
+    if (
+        !text
+        || !id
+    ) {
+        return 0;
+    }
+
+    const char *cursor = text;
+
+    if (
+        !tfb_transaction_v2_match_literal(
+            &cursor,
+            "TREEFORGE_TRANSACTION_V2\n"
+            "id="
+        )
+        || !tfb_transaction_v2_parse_id(
+            &cursor,
+            id
+        )
+        || !tfb_transaction_v2_match_literal(
+            &cursor,
+            "\n"
+            "step=1\n"
+            "origin=android\n"
+            "consumer=android\n"
+            "operation=proof\n"
+            "phase=continuation\n"
+            "payload_type=none\n"
+            "payload_ref=-\n"
+            "payload_sha256=-\n"
+            "target=none\n"
+            "return_target=android_a\n"
+            "status=ready\n"
+            "result=proof_bootstrap_pass\n"
+        )
+    ) {
+        return 0;
+    }
+
+    return *cursor == '\0';
+}
+
+
+static enum tfb_transaction_v2_file_status
+tfb_transaction_v2_read_text(
+    const char *path,
+    char *buffer,
+    usize capacity
+) {
+    if (
+        !path
+        || !buffer
+        || capacity < 2
+    ) {
+        return TFB_TX_FILE_ERROR;
+    }
+
+    long fd = tfb_open(
+        path,
+        O_RDONLY
+    );
+
+    if (
+        fd
+        == -TFB_TRANSACTION_V2_ENOENT
+    ) {
+        return TFB_TX_FILE_MISSING;
+    }
+
+    if (fd < 0) {
+        return TFB_TX_FILE_ERROR;
+    }
+
+    usize offset = 0;
+
+    while (
+        offset + 1 < capacity
+    ) {
+        long amount = tfb_syscall3(
+            SYS_READ,
+            fd,
+            (long) (
+                buffer
+                + offset
+            ),
+            (long) (
+                capacity
+                - offset
+                - 1
+            )
+        );
+
+        if (amount == 0) {
+            break;
+        }
+
+        if (amount < 0) {
+            tfb_close(fd);
+            return TFB_TX_FILE_ERROR;
+        }
+
+        for (
+            long index = 0;
+            index < amount;
+            index++
+        ) {
+            if (
+                buffer[
+                    offset
+                    + (usize) index
+                ] == '\0'
+            ) {
+                tfb_close(fd);
+                return TFB_TX_FILE_INVALID;
+            }
+        }
+
+        offset += (usize) amount;
+    }
+
+    if (
+        offset + 1
+        >= capacity
+    ) {
+        char extra = 0;
+
+        long amount = tfb_syscall3(
+            SYS_READ,
+            fd,
+            (long) &extra,
+            1
+        );
+
+        if (amount < 0) {
+            tfb_close(fd);
+            return TFB_TX_FILE_ERROR;
+        }
+
+        if (amount > 0) {
+            tfb_close(fd);
+            return TFB_TX_FILE_INVALID;
+        }
+    }
+
+    tfb_close(fd);
+
+    if (offset == 0) {
+        return TFB_TX_FILE_INVALID;
+    }
+
+    buffer[offset] = '\0';
+
+    return TFB_TX_FILE_VALID;
+}
+
+
+static int tfb_transaction_v2_path_presence(
+    const char *path
+) {
+    long fd = tfb_open(
+        path,
+        O_RDONLY
+    );
+
+    if (fd >= 0) {
+        tfb_close(fd);
+        return 1;
+    }
+
+    if (
+        fd
+        == -TFB_TRANSACTION_V2_ENOENT
+    ) {
+        return 0;
+    }
+
+    return -1;
+}
+
+
+static int tfb_transaction_v2_write_piece(
+    long fd,
+    const char *value
+) {
+    if (
+        fd < 0
+        || !value
+    ) {
+        return 0;
+    }
+
+    usize remaining =
+        tfb_strlen(
+            value
+        );
+
+    const char *cursor =
+        value;
+
+    while (remaining != 0) {
+        long amount = tfb_syscall3(
+            SYS_WRITE,
+            fd,
+            (long) cursor,
+            (long) remaining
+        );
+
+        if (amount <= 0) {
+            return 0;
+        }
+
+        cursor += amount;
+        remaining -=
+            (usize) amount;
+    }
+
+    return 1;
+}
+
+
+static void tfb_transaction_v2_unlink_temp(
+    const char *path
+) {
+    tfb_syscall3(
+        SYS_UNLINKAT,
+        AT_FDCWD,
+        (long) path,
+        0
+    );
+}
+
+
+static int
+tfb_transaction_v2_write_continuation_temp(
+    const char id[
+        TFB_TRANSACTION_V2_ID_LENGTH
+        + 1
+    ]
+) {
+    if (!id) {
+        return 0;
+    }
+
+    long fd = tfb_syscall4(
+        SYS_OPENAT,
+        AT_FDCWD,
+        (long)
+            tfb_transaction_v2_result_temp_path,
+        O_WRONLY
+            | O_CREAT
+            | O_TRUNC,
+        0644
+    );
+
+    if (fd < 0) {
+        return 0;
+    }
+
+    int ok = (
+        tfb_transaction_v2_write_piece(
+            fd,
+            "TREEFORGE_TRANSACTION_V2\n"
+            "id="
+        )
+        && tfb_transaction_v2_write_piece(
+            fd,
+            id
+        )
+        && tfb_transaction_v2_write_piece(
+            fd,
+            "\n"
+            "step=1\n"
+            "origin=android\n"
+            "consumer=android\n"
+            "operation=proof\n"
+            "phase=continuation\n"
+            "payload_type=none\n"
+            "payload_ref=-\n"
+            "payload_sha256=-\n"
+            "target=none\n"
+            "return_target=android_a\n"
+            "status=ready\n"
+            "result=proof_bootstrap_pass\n"
+        )
+    );
+
+    if (
+        ok
+        && tfb_syscall1(
+            SYS_FSYNC,
+            fd
+        ) < 0
+    ) {
+        ok = 0;
+    }
+
+    tfb_close(fd);
+
+    if (!ok) {
+        tfb_transaction_v2_unlink_temp(
+            tfb_transaction_v2_result_temp_path
+        );
+
+        return 0;
+    }
+
+    return 1;
+}
+
+
+static int tfb_transaction_v2_rename(
+    const char *from,
+    const char *to
+) {
+    return (
+        tfb_syscall4(
+            SYS_RENAMEAT,
+            AT_FDCWD,
+            (long) from,
+            AT_FDCWD,
+            (long) to
+        ) >= 0
+    );
+}
+
+
+static int tfb_transaction_v2_unlink(
+    const char *path
+) {
+    return (
+        tfb_syscall3(
+            SYS_UNLINKAT,
+            AT_FDCWD,
+            (long) path,
+            0
+        ) >= 0
+    );
+}
+
+
+static void tfb_transaction_v2_sync(
+    void
+) {
+    tfb_syscall1(
+        SYS_SYNC,
+        0
+    );
+}
+
+
+__attribute__((noreturn))
+static void tfb_transaction_v2_fail(
+    const char *detail
+) {
+    tfb_log(
+        detail
+            ? detail
+            : "transaction-v2=unknown-error"
+    );
+
+    tfb_transition_failure(
+        "transaction-v2-error"
+    );
+}
+
+
+__attribute__((noreturn))
+static void
+tfb_transaction_v2_handoff_android(
+    void
+) {
+    if (!tfb_runtime_envp) {
+        tfb_transaction_v2_fail(
+            "transaction-v2=android-env-missing"
+        );
+    }
+
+    tfb_log(
+        "transaction-v2=handoff-android-a"
+    );
+
+    /*
+     * Transaction interception runs before tfb_run_menu().
+     * No menu input set and no TreeForge ADB service have been
+     * acquired yet. Close the ordinary Bootstrap diagnostics FDs
+     * before continuing through Android's accepted selinux_setup
+     * handoff.
+     */
+    tfb_close(
+        tfb_tty
+    );
+    tfb_tty = -1;
+
+    tfb_close(
+        tfb_console
+    );
+    tfb_console = -1;
+
+    tfb_close(
+        tfb_kmsg
+    );
+    tfb_kmsg = -1;
+
+    char *android_argv[] = {
+        (char *)
+            "/system/bin/init",
+        (char *)
+            "selinux_setup",
+        0
+    };
+
+    tfb_syscall3(
+        SYS_EXECVE,
+        (long)
+            "/system/bin/init",
+        (long)
+            android_argv,
+        (long)
+            tfb_runtime_envp
+    );
+
+    tfb_transition_failure(
+        "android-slot-a-exec"
+    );
+}
+
+
+static void tfb_transaction_v2_pre_menu(
+    void
+) {
+    int pending_temp =
+        tfb_transaction_v2_path_presence(
+            tfb_transaction_v2_pending_temp_path
+        );
+
+    int result_temp =
+        tfb_transaction_v2_path_presence(
+            tfb_transaction_v2_result_temp_path
+        );
+
+    if (
+        pending_temp != 0
+        || result_temp != 0
+    ) {
+        tfb_transaction_v2_fail(
+            "transaction-v2=stale-temp"
+        );
+    }
+
+    char pending_text[
+        TFB_TRANSACTION_V2_TEXT_MAX
+    ];
+
+    char running_text[
+        TFB_TRANSACTION_V2_TEXT_MAX
+    ];
+
+    char result_text[
+        TFB_TRANSACTION_V2_TEXT_MAX
+    ];
+
+    enum tfb_transaction_v2_file_status
+        pending_status =
+            tfb_transaction_v2_read_text(
+                tfb_transaction_v2_pending_path,
+                pending_text,
+                sizeof(pending_text)
+            );
+
+    enum tfb_transaction_v2_file_status
+        running_status =
+            tfb_transaction_v2_read_text(
+                tfb_transaction_v2_running_path,
+                running_text,
+                sizeof(running_text)
+            );
+
+    enum tfb_transaction_v2_file_status
+        result_status =
+            tfb_transaction_v2_read_text(
+                tfb_transaction_v2_result_path,
+                result_text,
+                sizeof(result_text)
+            );
+
+    if (
+        pending_status
+            == TFB_TX_FILE_ERROR
+        || running_status
+            == TFB_TX_FILE_ERROR
+        || result_status
+            == TFB_TX_FILE_ERROR
+    ) {
+        tfb_transaction_v2_fail(
+            "transaction-v2=state-io-error"
+        );
+    }
+
+    if (
+        pending_status
+            == TFB_TX_FILE_INVALID
+        || running_status
+            == TFB_TX_FILE_INVALID
+        || result_status
+            == TFB_TX_FILE_INVALID
+    ) {
+        tfb_transaction_v2_fail(
+            "transaction-v2=malformed-record"
+        );
+    }
+
+    /*
+     * Recover only the ABI-v2 state explicitly permitted:
+     *
+     *     running + matching result
+     *
+     * The proof operation itself is never replayed.
+     */
+    if (
+        running_status
+        == TFB_TX_FILE_VALID
+    ) {
+        if (
+            pending_status
+            == TFB_TX_FILE_VALID
+        ) {
+            tfb_transaction_v2_fail(
+                "transaction-v2=running-pending-conflict"
+            );
+        }
+
+        char running_id[
+            TFB_TRANSACTION_V2_ID_LENGTH
+            + 1
+        ];
+
+        if (
+            !tfb_transaction_v2_parse_proof_request(
+                running_text,
+                running_id
+            )
+        ) {
+            tfb_transaction_v2_fail(
+                "transaction-v2=running-invalid"
+            );
+        }
+
+        if (
+            result_status
+            == TFB_TX_FILE_MISSING
+        ) {
+            tfb_transaction_v2_fail(
+                "transaction-v2=running-recovery-required"
+            );
+        }
+
+        char result_id[
+            TFB_TRANSACTION_V2_ID_LENGTH
+            + 1
+        ];
+
+        if (
+            !tfb_transaction_v2_parse_proof_continuation(
+                result_text,
+                result_id
+            )
+            || !tfb_string_equal(
+                running_id,
+                result_id
+            )
+        ) {
+            tfb_transaction_v2_fail(
+                "transaction-v2=recovery-result-mismatch"
+            );
+        }
+
+        if (
+            !tfb_transaction_v2_unlink(
+                tfb_transaction_v2_running_path
+            )
+        ) {
+            tfb_transaction_v2_fail(
+                "transaction-v2=recovery-retire-running-failed"
+            );
+        }
+
+        tfb_transaction_v2_sync();
+
+        tfb_log(
+            "transaction-v2=recovered-published-continuation"
+        );
+
+        tfb_transaction_v2_handoff_android();
+    }
+
+    /*
+     * A continuation already durably published for Android is not
+     * replayed. Return directly to its consumer.
+     */
+    if (
+        result_status
+        == TFB_TX_FILE_VALID
+    ) {
+        if (
+            pending_status
+            == TFB_TX_FILE_VALID
+        ) {
+            tfb_transaction_v2_fail(
+                "transaction-v2=result-pending-conflict"
+            );
+        }
+
+        char result_id[
+            TFB_TRANSACTION_V2_ID_LENGTH
+            + 1
+        ];
+
+        if (
+            !tfb_transaction_v2_parse_proof_continuation(
+                result_text,
+                result_id
+            )
+        ) {
+            tfb_transaction_v2_fail(
+                "transaction-v2=result-not-bootstrap-proof-continuation"
+            );
+        }
+
+        tfb_log(
+            "transaction-v2=continuation-already-published"
+        );
+
+        tfb_transaction_v2_handoff_android();
+    }
+
+    if (
+        pending_status
+        == TFB_TX_FILE_MISSING
+    ) {
+        /*
+         * No transaction: preserve the exact existing Bootstrap
+         * menu path.
+         */
+        return;
+    }
+
+    char transaction_id[
+        TFB_TRANSACTION_V2_ID_LENGTH
+        + 1
+    ];
+
+    if (
+        !tfb_transaction_v2_parse_proof_request(
+            pending_text,
+            transaction_id
+        )
+    ) {
+        tfb_transaction_v2_fail(
+            "transaction-v2=pending-unsupported-or-invalid"
+        );
+    }
+
+    /*
+     * Claim:
+     *
+     *     pending -> running
+     *
+     * renameat is the ownership boundary. A lone running record is
+     * never treated as executable on a later boot.
+     */
+    if (
+        !tfb_transaction_v2_rename(
+            tfb_transaction_v2_pending_path,
+            tfb_transaction_v2_running_path
+        )
+    ) {
+        tfb_transaction_v2_fail(
+            "transaction-v2=claim-rename-failed"
+        );
+    }
+
+    tfb_transaction_v2_sync();
+
+    char claimed_text[
+        TFB_TRANSACTION_V2_TEXT_MAX
+    ];
+
+    char claimed_id[
+        TFB_TRANSACTION_V2_ID_LENGTH
+        + 1
+    ];
+
+    if (
+        tfb_transaction_v2_read_text(
+            tfb_transaction_v2_running_path,
+            claimed_text,
+            sizeof(claimed_text)
+        )
+            != TFB_TX_FILE_VALID
+        || !tfb_transaction_v2_parse_proof_request(
+            claimed_text,
+            claimed_id
+        )
+        || !tfb_string_equal(
+            transaction_id,
+            claimed_id
+        )
+    ) {
+        tfb_transaction_v2_fail(
+            "transaction-v2=claim-verification-failed"
+        );
+    }
+
+    tfb_log(
+        "transaction-v2=proof-claimed"
+    );
+
+    /*
+     * Bounded Bootstrap-side proof:
+     *
+     * Reaching this exact post-FirstStageMain point proves Bootstrap
+     * has survived the Android first-stage transition, /metadata is
+     * available, the canonical request is readable, and ownership
+     * was atomically claimed by Bootstrap.
+     *
+     * Publish the Android continuation before retiring running.
+     */
+    if (
+        !tfb_transaction_v2_write_continuation_temp(
+            transaction_id
+        )
+    ) {
+        tfb_transaction_v2_fail(
+            "transaction-v2=result-temp-write-failed"
+        );
+    }
+
+    if (
+        !tfb_transaction_v2_rename(
+            tfb_transaction_v2_result_temp_path,
+            tfb_transaction_v2_result_path
+        )
+    ) {
+        tfb_transaction_v2_fail(
+            "transaction-v2=result-publish-rename-failed"
+        );
+    }
+
+    tfb_transaction_v2_sync();
+
+    char published_text[
+        TFB_TRANSACTION_V2_TEXT_MAX
+    ];
+
+    char published_id[
+        TFB_TRANSACTION_V2_ID_LENGTH
+        + 1
+    ];
+
+    if (
+        tfb_transaction_v2_read_text(
+            tfb_transaction_v2_result_path,
+            published_text,
+            sizeof(published_text)
+        )
+            != TFB_TX_FILE_VALID
+        || !tfb_transaction_v2_parse_proof_continuation(
+            published_text,
+            published_id
+        )
+        || !tfb_string_equal(
+            transaction_id,
+            published_id
+        )
+    ) {
+        tfb_transaction_v2_fail(
+            "transaction-v2=result-verification-failed"
+        );
+    }
+
+    /*
+     * result is durable first. Only now retire the running marker.
+     * If power is lost before this unlink, the next Bootstrap boot
+     * sees running + matching result and performs recovery without
+     * replaying the proof.
+     */
+    if (
+        !tfb_transaction_v2_unlink(
+            tfb_transaction_v2_running_path
+        )
+    ) {
+        tfb_transaction_v2_fail(
+            "transaction-v2=retire-running-failed"
+        );
+    }
+
+    tfb_transaction_v2_sync();
+
+    tfb_log(
+        "transaction-v2=proof-continuation-published"
+    );
+
+    tfb_transaction_v2_handoff_android();
+}
+
+
+/* TFB_TRANSACTION_V2_BOOTSTRAP_R1_END */
+
+
 __TREEFORGE_MENU_CONTROLLER_SOURCE__static void tfb_main(
     long argc,
     char **argv,
@@ -8671,6 +9715,12 @@ __TREEFORGE_MENU_CONTROLLER_SOURCE__static void tfb_main(
 
         tfb_runtime_envp =
             envp;
+
+        /*
+         * Transaction ABI v2 is Bootstrap-owned and runs before any
+         * normal Boot Manager/menu initialization.
+         */
+        tfb_transaction_v2_pre_menu();
 
         tfb_menu_load_runtime_state();
 
