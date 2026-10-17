@@ -43,45 +43,35 @@ def _sha256(path: Path) -> str:
 def _contract() -> dict[str, object]:
     try:
         data = json.loads(
-            PROVIDER_CONTRACT.read_text(encoding="utf-8")
+            PROVIDER_CONTRACT.read_text(
+                encoding="utf-8"
+            )
         )
-    except (OSError, json.JSONDecodeError) as error:
+    except (
+        OSError,
+        json.JSONDecodeError,
+    ) as error:
         raise TreeForgeReleasedRuntimeProviderError(
             "unable to read Bootstrap provider contract"
         ) from error
 
-    artifact = data.get("artifact")
     runtime = data.get("runtime")
 
-    if not isinstance(artifact, dict) or not isinstance(runtime, dict):
+    if not isinstance(runtime, dict):
         raise TreeForgeReleasedRuntimeProviderError(
-            "Bootstrap provider contract is incomplete"
+            "Bootstrap runtime provider contract is incomplete"
         )
 
-    payload = runtime.get("payload")
+    seed = runtime.get("canonical_seed")
 
-    if not isinstance(payload, dict):
+    if not isinstance(seed, dict):
         raise TreeForgeReleasedRuntimeProviderError(
-            "Bootstrap runtime payload contract is missing"
+            "Bootstrap canonical seed contract is missing"
         )
 
-    cpio = payload.get("initramfs.cpio")
-
-    if not isinstance(cpio, dict):
-        raise TreeForgeReleasedRuntimeProviderError(
-            "Bootstrap runtime CPIO contract is missing"
-        )
-
-    required = {
-        "release": runtime.get("canonical_seed_release"),
-        "asset": artifact.get("name"),
-        "archive_sha256": artifact.get("sha256"),
-        "archive_bytes": artifact.get("bytes"),
-        "cpio_sha256": cpio.get("sha256"),
-        "cpio_bytes": cpio.get("bytes"),
-    }
-
-    release = required["release"]
+    artifact = seed.get("artifact")
+    cpio = seed.get("cpio")
+    release = seed.get("release")
 
     if (
         not isinstance(release, str)
@@ -95,33 +85,68 @@ def _contract() -> dict[str, object]:
             "Bootstrap canonical seed release is invalid"
         )
 
-    if not isinstance(required["asset"], str) or not required["asset"]:
+    if (
+        not isinstance(artifact, dict)
+        or not isinstance(cpio, dict)
+    ):
         raise TreeForgeReleasedRuntimeProviderError(
-            "Bootstrap runtime provider asset name is invalid"
+            "Bootstrap canonical seed identity is incomplete"
         )
 
-    for name in ("archive_sha256", "cpio_sha256"):
+    required = {
+        "release": release,
+        "asset": artifact.get("name"),
+        "archive_sha256": artifact.get("sha256"),
+        "archive_bytes": artifact.get("bytes"),
+        "cpio_sha256": cpio.get("sha256"),
+        "cpio_bytes": cpio.get("bytes"),
+    }
+
+    if (
+        not isinstance(
+            required["asset"],
+            str,
+        )
+        or not required["asset"]
+    ):
+        raise TreeForgeReleasedRuntimeProviderError(
+            "Bootstrap canonical seed asset name is invalid"
+        )
+
+    for name in (
+        "archive_sha256",
+        "cpio_sha256",
+    ):
         value = required[name]
 
         if (
             not isinstance(value, str)
             or len(value) != 64
-            or any(character not in "0123456789abcdef" for character in value)
+            or any(
+                character
+                not in "0123456789abcdef"
+                for character in value
+            )
         ):
             raise TreeForgeReleasedRuntimeProviderError(
-                f"Bootstrap runtime provider {name} is invalid"
+                f"Bootstrap canonical seed {name} is invalid"
             )
 
-    for name in ("archive_bytes", "cpio_bytes"):
+    for name in (
+        "archive_bytes",
+        "cpio_bytes",
+    ):
         value = required[name]
 
-        if not isinstance(value, int) or value <= 0:
+        if (
+            not isinstance(value, int)
+            or value <= 0
+        ):
             raise TreeForgeReleasedRuntimeProviderError(
-                f"Bootstrap runtime provider {name} is invalid"
+                f"Bootstrap canonical seed {name} is invalid"
             )
 
     return required
-
 
 def _verify_file(path: Path, *, size: int, sha256: str, label: str) -> None:
     if not path.is_file():

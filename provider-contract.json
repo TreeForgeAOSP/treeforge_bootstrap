@@ -96,7 +96,18 @@
   "role": "persistent-installed-bootstrap",
   "runtime": {
     "assembly": "treeforge-source-plus-pinned-providers",
-    "canonical_seed_release": "v1.0b1",
+    "canonical_seed": {
+      "artifact": {
+        "bytes": 12240128,
+        "name": "treeforge-bootstrap-tangorpro-android15-runtime.tar.xz",
+        "sha256": "c45078944b66086dff77a9a20b3560fbb1c62c5abbb4153cf5cfd78d39162a71"
+      },
+      "cpio": {
+        "bytes": 15592816,
+        "sha256": "d9c186b16039b30b3a25afbd8eb34e725eaa56a55597fd000e1d50207d011fc1"
+      },
+      "release": "v1.0b1"
+    },
     "consumer_signing": "downstream_consumer",
     "menu_identity": "TreeForge Boot Manager",
     "payload": {
