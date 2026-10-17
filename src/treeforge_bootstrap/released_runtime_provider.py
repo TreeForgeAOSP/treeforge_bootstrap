@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import tarfile
 import tempfile
@@ -17,7 +18,6 @@ class TreeForgeReleasedRuntimeProviderError(RuntimeError):
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 PROVIDER_CONTRACT = REPOSITORY_ROOT / "provider-contract.json"
-VERSION_FILE = REPOSITORY_ROOT / "VERSION"
 CACHE_ROOT = (
     Path.home()
     / ".cache"
@@ -38,21 +38,6 @@ def _sha256(path: Path) -> str:
             digest.update(block)
 
     return digest.hexdigest()
-
-
-def _release_tag() -> str:
-    for raw in VERSION_FILE.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-
-        if line.startswith("TREEFORGE_BOOTSTRAP_VERSION="):
-            value = line.split("=", 1)[1].strip()
-
-            if value:
-                return value
-
-    raise TreeForgeReleasedRuntimeProviderError(
-        "TreeForge Bootstrap VERSION has no release identity"
-    )
 
 
 def _contract() -> dict[str, object]:
@@ -88,12 +73,27 @@ def _contract() -> dict[str, object]:
         )
 
     required = {
+        "release": runtime.get("canonical_seed_release"),
         "asset": artifact.get("name"),
         "archive_sha256": artifact.get("sha256"),
         "archive_bytes": artifact.get("bytes"),
         "cpio_sha256": cpio.get("sha256"),
         "cpio_bytes": cpio.get("bytes"),
     }
+
+    release = required["release"]
+
+    if (
+        not isinstance(release, str)
+        or re.fullmatch(
+            r"v[0-9]+\.[0-9]+b[0-9]+",
+            release,
+        )
+        is None
+    ):
+        raise TreeForgeReleasedRuntimeProviderError(
+            "Bootstrap canonical seed release is invalid"
+        )
 
     if not isinstance(required["asset"], str) or not required["asset"]:
         raise TreeForgeReleasedRuntimeProviderError(
@@ -168,7 +168,7 @@ def _download(url: str, destination: Path) -> None:
 
 def ensure_released_runtime_archive() -> Path:
     contract = _contract()
-    release = _release_tag()
+    release = str(contract["release"])
     root = CACHE_ROOT / release
     archive = root / str(contract["asset"])
 
@@ -227,7 +227,7 @@ def ensure_released_runtime_archive() -> Path:
 
 def ensure_released_runtime_cpio() -> Path:
     contract = _contract()
-    release = _release_tag()
+    release = str(contract["release"])
     root = CACHE_ROOT / release
     cpio = root / "initramfs.cpio"
 

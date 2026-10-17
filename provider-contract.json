@@ -96,6 +96,7 @@
   "role": "persistent-installed-bootstrap",
   "runtime": {
     "assembly": "treeforge-source-plus-pinned-providers",
+    "canonical_seed_release": "v1.0b1",
     "consumer_signing": "downstream_consumer",
     "menu_identity": "TreeForge Boot Manager",
     "payload": {
