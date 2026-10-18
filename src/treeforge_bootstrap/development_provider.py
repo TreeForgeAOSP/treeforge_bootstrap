@@ -1573,6 +1573,110 @@ def package_development_provider() -> Path:
     return final
 
 
+# Version-specific hardware-accepted historical release promotion.
+# The v1.0b1 frozen values in runtime.py remain authoritative for the
+# original release. No runtime binary is modified or reconstructed here.
+ACCEPTANCE_ROOT = ROOT / "release-acceptance"
+
+
+def _verify_historical_acceptance(
+    root: Path,
+    manifest: dict[str, object],
+) -> None:
+    version = manifest.get("version")
+    if not isinstance(version, str) or not version.startswith("v"):
+        raise TreeForgeBootstrapDevelopmentProviderError(
+            "historical release version invalid"
+        )
+
+    acceptance_path = ACCEPTANCE_ROOT / (version + ".json")
+    if not acceptance_path.is_file():
+        raise TreeForgeBootstrapDevelopmentProviderError(
+            f"release candidate requires explicit accepted-runtime contract: {version}"
+        )
+
+    try:
+        accepted = json.loads(acceptance_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise TreeForgeBootstrapDevelopmentProviderError(
+            "historical release acceptance unreadable"
+        ) from error
+
+    required_fields = {
+        "schema", "repository", "release_version", "runtime_abi",
+        "accepted_run", "accepted_source_commit", "development_metadata_sha256",
+        "runtime_files", "artifacts", "provider_components",
+    }
+    if not isinstance(accepted, dict) or set(accepted) != required_fields:
+        raise TreeForgeBootstrapDevelopmentProviderError(
+            "historical release acceptance schema mismatch"
+        )
+
+    expected_source = accepted["accepted_source_commit"]
+    metadata = root / "development-provider.json"
+    if (
+        accepted["schema"] != "treeforge.bootstrap.accepted-release.v1"
+        or accepted["repository"] != "TreeForgeAOSP/treeforge_bootstrap"
+        or accepted["release_version"] != version
+        or accepted["runtime_abi"] != manifest.get("runtime_abi")
+        or accepted["accepted_run"] != root.name
+        or accepted["accepted_run"] != manifest.get("run_id")
+        or not isinstance(expected_source, str)
+        or len(expected_source) != 40
+        or any(c not in "0123456789abcdef" for c in expected_source)
+        or expected_source != manifest.get("source_commit")
+        or manifest.get("source_dirty") is not False
+        or accepted["development_metadata_sha256"] != _sha256(metadata)
+        or accepted["runtime_files"] != manifest.get("runtime_files")
+        or accepted["artifacts"] != manifest.get("artifacts")
+    ):
+        raise TreeForgeBootstrapDevelopmentProviderError(
+            "historical release identity differs from accepted provider"
+        )
+
+    provider = json.loads((root / "provider.json").read_text(encoding="utf-8"))
+    if (
+        provider.get("components") != accepted["provider_components"]
+        or provider.get("payload") != accepted["runtime_files"]
+    ):
+        raise TreeForgeBootstrapDevelopmentProviderError(
+            "historical release provider payload/components changed"
+        )
+
+    # The original source commit must be part of this checkout's history;
+    # release tooling changes made afterward never rewrite that identity.
+    ancestry = subprocess.run(
+        ["git", "-C", str(ROOT), "merge-base", "--is-ancestor",
+         expected_source, _git_commit()],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if ancestry.returncode != 0:
+        raise TreeForgeBootstrapDevelopmentProviderError(
+            "accepted source commit not ancestral to release HEAD"
+        )
+
+    previous_version = subprocess.run(
+        ["git", "-C", str(ROOT), "show", f"{expected_source}:VERSION"],
+        text=True, capture_output=True, check=False,
+    )
+    if (
+        previous_version.returncode != 0
+        or f"TREEFORGE_BOOTSTRAP_VERSION={version}" not in previous_version.stdout.splitlines()
+        or f"TREEFORGE_RUNTIME_ABI_VERSION={manifest.get('runtime_abi')}"
+           not in previous_version.stdout.splitlines()
+        or _git_dirty()
+    ):
+        raise TreeForgeBootstrapDevelopmentProviderError(
+            "accepted source revision/version or release worktree invalid"
+        )
+
+    print(f"HISTORICAL_ACCEPTED_RUN={root.name}")
+    print(f"HISTORICAL_ACCEPTED_SOURCE={expected_source}")
+    print("HISTORICAL_ACCEPTED_BYTES=PASS")
+    print("RUNTIME_REBUILT=NO")
+
+
 def _release_candidate(
 ) -> tuple[
     Path,
@@ -1603,21 +1707,13 @@ def _release_candidate(
             )
         )
 
-    if (
-        manifest.get(
-            "source_dirty"
-        )
-        is not False
-        or manifest.get(
-            "source_commit"
-        )
-        != _git_commit()
-    ):
-        raise (
-            TreeForgeBootstrapDevelopmentProviderError(
-                "release candidate is not "
-                "a clean current-HEAD run"
-            )
+    candidate_is_current_head = (
+        manifest.get("source_dirty") is False
+        and manifest.get("source_commit") == _git_commit()
+    )
+    if manifest.get("source_dirty") is not False or _git_dirty():
+        raise TreeForgeBootstrapDevelopmentProviderError(
+            "release candidate source must be clean"
         )
 
     dependencies = manifest.get(
@@ -1692,12 +1788,10 @@ def _release_candidate(
         },
     }
 
-    if runtime_files != frozen:
-        raise (
-            TreeForgeBootstrapDevelopmentProviderError(
-                "release frozen runtime mismatch"
-            )
-        )
+    if not candidate_is_current_head or runtime_files != frozen:
+        # Exact accepted version/run/source/metadata/artifact/payload pins
+        # replace neither the v1.0b1 freeze nor any verification routine.
+        _verify_historical_acceptance(root, manifest)
 
     provider = json.loads(
         (
@@ -1815,6 +1909,13 @@ def _release_candidate(
             )
         )
 
+    return root, manifest
+
+
+def verify_release_candidate() -> tuple[Path, dict[str, object]]:
+    """Read-only verification of the exact source/provenance/bytes to release."""
+    root, manifest = _release_candidate()
+    print("TREEFORGE_BOOTSTRAP_RELEASE_CANDIDATE=PASS")
     return root, manifest
 
 
@@ -2063,4 +2164,5 @@ __all__ = [
     "package_development_provider",
     "prepare_release",
     "verify_development_provider",
+    "verify_release_candidate",
 ]

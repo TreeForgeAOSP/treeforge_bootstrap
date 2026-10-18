@@ -1,0 +1,48 @@
+{
+  "accepted_run": "20261017-113241-067889-0400",
+  "accepted_source_commit": "1a89fc7bcd99521040538f1f004f15804f58376e",
+  "artifacts": {
+    "SHA256SUMS": {
+      "bytes": 359,
+      "sha256": "8ae90d03334fd2ab7b0b5b0cee23956dc2b01968919be65929829fb474313710"
+    },
+    "provider.json": {
+      "bytes": 1095,
+      "sha256": "a4e6a973e2e9f0f2383dad8d374bfa66a66e526d9ff86dfc1fb2b080216fb42b"
+    },
+    "treeforge-bootstrap-tangorpro-android15-realizer.tar.xz": {
+      "bytes": 122632,
+      "sha256": "ba2a2d3b808391591e4d4786a1b74572270c1563b57060d48e5dffd31489edc3"
+    },
+    "treeforge-bootstrap-tangorpro-android15-runtime.tar.xz": {
+      "bytes": 12244068,
+      "sha256": "b8d0f4131e104e3dd6af41c1ae9bd2a1c9df4ab496a96c38c5d8a9f5cf0c04c6"
+    }
+  },
+  "development_metadata_sha256": "21535cae63d466a907705fead880d921a1c0d854d5f5699d9bbb011d53522442",
+  "provider_components": {
+    "boot_manager": "v1.0b1",
+    "boot_menu": "v1.0b1",
+    "bootstrap": "v1.0b2",
+    "framebuffer": "v1.0b1",
+    "runtime_abi": "v1.0b1"
+  },
+  "release_version": "v1.0b2",
+  "repository": "TreeForgeAOSP/treeforge_bootstrap",
+  "runtime_abi": "v1.0b1",
+  "runtime_files": {
+    "initramfs.cpio": {
+      "bytes": 15596896,
+      "sha256": "624237c7edcbec89a3bceb3c46e76fab6a768c2ede3e764cb55476b2669949bb"
+    },
+    "initramfs.lz4": {
+      "bytes": 7752189,
+      "sha256": "8cf776f036c6b52c2df6b8344394d99af53f3dfa8b613de00cf559c4499796f3"
+    },
+    "treeforge-menu": {
+      "bytes": 10236873,
+      "sha256": "ef1caee3d8b3c0f95468f2ac97c613c1069022179d7d473a1daeb25b9ec3159d"
+    }
+  },
+  "schema": "treeforge.bootstrap.accepted-release.v1"
+}

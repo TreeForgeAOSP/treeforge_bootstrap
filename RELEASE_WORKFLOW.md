@@ -25,3 +25,21 @@ Note: modifying this repository's release scripts changes its source commit.
 Already-built development artifacts tied to the previous HEAD cannot pass
 legacy release-prepare source-equality gates until explicitly reconciled.
 Do not disable provider/Owner-AVB/signing verification to work around this.
+
+## Historical Bootstrap v1.0b2 acceptance
+
+`./release accepted-check` verifies the frozen hardware-accepted development
+provider against `release-acceptance/v1.0b2.json`, including its source commit
+ancestry, original VERSION, exact development manifest digest, all provider
+artifact hashes, and the three runtime member hashes/sizes. It does not build
+or stage a release. The pinned provider's source identity is distinct from
+current release tooling HEAD. The legacy v1.0b1 runtime.py frozen constants
+remain unchanged for all other releases.
+
+`./release prepare` continues to copy the verified runtime and realizer bytes
+unchanged, then creates the normal release Manager manifest and a checksum file
+for the top-level release assets. The Bootstrap asset checksum file is
+`ASSET-SHA256SUMS` (not the nested provider `SHA256SUMS`).
+
+There is no implied publication: the normal owner-only interactive publish
+command retains its strict GitHub remote-branch and publication checks.

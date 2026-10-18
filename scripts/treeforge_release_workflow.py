@@ -212,7 +212,19 @@ def read_provider_identity() -> dict:
         raise Refusal(f'accepted development provenance missing at {metadata}')
     doc = json.loads(metadata.read_text())
     head = git('rev-parse', 'HEAD')
-    require(doc.get('source_commit') == head, f'development artifact source commit mismatch: {doc.get("source_commit")} != {head}')
+    if REPO == 'treeforge_bootstrap' and doc.get('source_commit') != head:
+        # Only the exact pinned historical Bootstrap accepted release is
+        # eligible. Never treat an arbitrary previous development run as valid.
+        sys.path.insert(0, str(ROOT / 'src'))
+        try:
+            from treeforge_bootstrap.development_provider import verify_release_candidate
+            _, checked = verify_release_candidate()
+            require(checked.get('source_commit') == doc.get('source_commit'),
+                    'accepted Bootstrap source identity inconsistent')
+        except Exception as exc:
+            raise Refusal(f'Bootstrap historical acceptance refused: {exc}') from exc
+    else:
+        require(doc.get('source_commit') == head, f'development artifact source commit mismatch: {doc.get("source_commit")} != {head}')
     require(doc.get('source_dirty') is False, 'development artifact was built dirty')
     require(doc.get('channel') == 'development' and doc.get('release_eligible') is False,
             'development provenance channel invalid')
@@ -226,8 +238,12 @@ def staged_assets(tag: str) -> list[Path]:
     require(assets.is_dir(), f'no prepared release assets: {assets}; run ./release prepare')
     files = sorted(p for p in assets.iterdir() if p.is_file())
     require(bool(files), 'empty prepared release')
-    sums = assets / 'SHA256SUMS'
-    require(sums.is_file(), f'{REPO}: staged SHA256SUMS missing')
+    # Bootstrap's SHA256SUMS is an internal *provider* checksum manifest;
+    # the top-level release asset manifest is ASSET-SHA256SUMS.
+    sum_name = 'ASSET-SHA256SUMS' if REPO == 'treeforge_bootstrap' else 'SHA256SUMS'
+    sums = assets / sum_name
+    require(sums.is_file(), f'{REPO}: staged {sum_name} missing')
+    indexed = set()
     for line in sums.read_text().splitlines():
         if not line.strip():
             continue
@@ -237,6 +253,11 @@ def staged_assets(tag: str) -> list[Path]:
         require(not rel.is_absolute() and '..' not in rel.parts, 'unsafe checksum path')
         path = assets / rel
         require(path.is_file() and sha(path) == match.group(1), f'checksum mismatch: {rel}')
+        require(str(rel) not in indexed, f'duplicate checksum entry: {rel}')
+        indexed.add(str(rel))
+    if REPO == 'treeforge_bootstrap':
+        expected = {p.name for p in files if p.name != sum_name}
+        require(indexed == expected, f'incomplete Bootstrap release asset checksum index: {expected ^ indexed}')
     print(f'STAGED_ASSETS=PASS COUNT={len(files)}')
     return files
 
@@ -489,6 +510,16 @@ def main(argv: list[str]) -> int:
         require(len(argv) == 1, 'usage: ./release contract')
         contract_readonly()
         return 0
+    if subcommand == 'accepted-check':
+        require(len(argv) == 1 and REPO == 'treeforge_bootstrap',
+                'usage: ./release accepted-check (Bootstrap only)')
+        sys.path.insert(0, str(ROOT / 'src'))
+        try:
+            from treeforge_bootstrap.development_provider import verify_release_candidate
+            verify_release_candidate()
+        except Exception as exc:
+            raise Refusal(f'Bootstrap accepted release candidate invalid: {exc}') from exc
+        return 0
     if subcommand == 'verify':
         built, _ = version_info()
         require(len(argv) <= 1, 'usage: ./release verify')
@@ -499,7 +530,7 @@ def main(argv: list[str]) -> int:
         require(len(argv) == 2, 'usage: ./release resume VERSION')
         resume(component_version(normalize(argv[1])))
         return 0
-    raise Refusal('usage: ./release [prepare [--force] | verify | publish | status | contract | resume VERSION]')
+    raise Refusal('usage: ./release [prepare [--force] | verify | publish | status | contract | accepted-check | resume VERSION]')
 
 
 if __name__ == '__main__':
