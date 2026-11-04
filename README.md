@@ -1,4 +1,4 @@
-# TreeForge Bootstrap — v1.0b2
+# TreeForge Bootstrap
 
 First-stage boot environment for TreeForge on Pixel Tablet (`tangorpro`).
 
@@ -8,7 +8,7 @@ First-stage boot environment for TreeForge on Pixel Tablet (`tangorpro`).
 
 Successful default builds publish `out/development-provider/current` and retain the newest five successful runs.
 
-Kernel, Framebuffer, and Menu development providers use the corresponding `--dev-provider-* [PATH]` arguments.
+Normal runtime builds resolve the newest published Framebuffer and Menu providers from GitHub and freeze their exact release identities. Kernel is resolved for image-family realization. Local development inputs require explicit `--dev-provider-* [PATH]` overrides.
 
 ## Verify
 
@@ -26,7 +26,7 @@ Installation-specific signed images are reconstructed downstream with the existi
 
 ## Transaction ABI v2
 
-Bootstrap `v1.0b2` adds the Bootstrap consumer for TreeForge Transaction ABI v2.
+Bootstrap contains the consumer for TreeForge Transaction ABI v2.
 
 The initial operation is `proof`. After Android stages a canonical
 `consumer=bootstrap` request under `/metadata/treeforge-bootstrap`, Bootstrap

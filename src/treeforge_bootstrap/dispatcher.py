@@ -6355,7 +6355,13 @@ static int tfb_realize_block_node(
     }
 
     if (partition == 0) {
-        return 0;
+        result = tfb_syscall4(
+            SYS_MKNODAT, AT_FDCWD,
+            (long) "/dev/block/treeforge_updated_gpt",
+            S_IFBLK | 0400,
+            (long) tfb_runtime_makedev(major, minor)
+        );
+        return (result == 0 || result == -17) ? 0 : -1;
     }
 
     char partname[

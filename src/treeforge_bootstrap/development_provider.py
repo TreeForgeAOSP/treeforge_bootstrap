@@ -5,6 +5,7 @@ import hashlib
 import json
 import lzma
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -305,6 +306,12 @@ def _dependency_record(
         record[
             "channel"
         ] = "published"
+        sums_path = resolved / "SHA256SUMS"
+        if not sums_path.is_file() or sums_path.is_symlink():
+            raise TreeForgeBootstrapDevelopmentProviderError(
+                "published dependency SHA256SUMS missing"
+            )
+        record["sha256sums_sha256"] = _sha256(sums_path)
 
     if provider.is_file():
         record[
@@ -1762,36 +1769,26 @@ def _release_candidate(
         "runtime_files"
     )
 
-    frozen = {
-        "initramfs.cpio": {
-            "bytes":
-                FROZEN_RUNTIME_CPIO_BYTES,
-
-            "sha256":
-                FROZEN_RUNTIME_CPIO_SHA256,
-        },
-
-        "initramfs.lz4": {
-            "bytes":
-                FROZEN_RUNTIME_LZ4_BYTES,
-
-            "sha256":
-                FROZEN_RUNTIME_LZ4_SHA256,
-        },
-
-        "treeforge-menu": {
-            "bytes":
-                FROZEN_RUNTIME_MENU_BYTES,
-
-            "sha256":
-                FROZEN_RUNTIME_MENU_SHA256,
-        },
-    }
-
-    if not candidate_is_current_head or runtime_files != frozen:
-        # Exact accepted version/run/source/metadata/artifact/payload pins
-        # replace neither the v1.0b1 freeze nor any verification routine.
+    if not candidate_is_current_head:
+        # Historical accepted releases still use their exact historical receipt.
         _verify_historical_acceptance(root, manifest)
+    else:
+        # Current-source beta builds are verified independently of PP's final install.
+        for name in ("framebuffer", "menu"):
+            selected = dependencies.get(name)
+            if (
+                not isinstance(selected, dict)
+                or selected.get("channel") != "published"
+                or not isinstance(selected.get("version"), str)
+                or not isinstance(selected.get("provider_manifest_sha256"), str)
+                or len(selected["provider_manifest_sha256"]) != 64
+                or not isinstance(selected.get("sha256sums_sha256"), str)
+                or len(selected["sha256sums_sha256"]) != 64
+            ):
+                raise TreeForgeBootstrapDevelopmentProviderError(
+                    "release requires verified published provider: " + name
+                )
+        print("BOOTSTRAP_CURRENT_SOURCE_RELEASE=PASS")
 
     provider = json.loads(
         (
@@ -1917,6 +1914,51 @@ def verify_release_candidate() -> tuple[Path, dict[str, object]]:
     root, manifest = _release_candidate()
     print("TREEFORGE_BOOTSTRAP_RELEASE_CANDIDATE=PASS")
     return root, manifest
+
+
+def _published_dependency_lock(manifest: dict[str, object]) -> dict[str, object]:
+    """Freeze the exact inputs already selected by this build, without re-resolving."""
+    dependencies = manifest.get("dependencies")
+    repos = {
+        "framebuffer": "TreeForgeAOSP/treeforge_bootstrap_framebuffer",
+        "menu": "TreeForgeAOSP/treeforge_bootstrap_menu",
+    }
+    if not isinstance(dependencies, dict) or set(dependencies) != set(repos):
+        raise TreeForgeBootstrapDevelopmentProviderError("release provider set invalid")
+    pinned: dict[str, dict[str, str]] = {}
+    for name, repository in repos.items():
+        record = dependencies[name]
+        if not isinstance(record, dict) or record.get("channel") != "published":
+            raise TreeForgeBootstrapDevelopmentProviderError("unpublished dependency: " + name)
+        tag = record.get("version")
+        manifest_sha = record.get("provider_manifest_sha256")
+        sums_sha = record.get("sha256sums_sha256")
+        if (
+            not isinstance(tag, str)
+            or re.fullmatch(r"v[0-9]+\.[0-9]+b[0-9]+", tag) is None
+            or not isinstance(manifest_sha, str)
+            or re.fullmatch(r"[0-9a-f]{64}", manifest_sha) is None
+            or not isinstance(sums_sha, str)
+            or re.fullmatch(r"[0-9a-f]{64}", sums_sha) is None
+        ):
+            raise TreeForgeBootstrapDevelopmentProviderError("invalid dependency pin: " + name)
+        pinned[name] = {
+            "repository": repository,
+            "release": tag,
+            "provider_json_sha256": manifest_sha,
+            "SHA256SUMS_sha256": sums_sha,
+        }
+    runtime_sha = manifest.get("artifacts", {}).get(RUNTIME_ASSET, {}).get("sha256")
+    if not isinstance(runtime_sha, str) or re.fullmatch(r"[0-9a-f]{64}", runtime_sha) is None:
+        raise TreeForgeBootstrapDevelopmentProviderError("runtime archive digest missing")
+    return {
+        "schema": "treeforge.bootstrap.resolved-providers.v1",
+        "provider": "bootstrap",
+        "version": manifest["version"],
+        "source_commit": manifest["source_commit"],
+        "runtime_sha256": runtime_sha,
+        "providers": pinned,
+    }
 
 
 def prepare_release(
@@ -2080,9 +2122,16 @@ def prepare_release(
                 )
             )
 
+        lock_path = staging_assets / "providers.lock.json"
+        lock_path.write_text(
+            json.dumps(_published_dependency_lock(manifest), indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
         names = (
             *promoted,
             MANAGER_ASSET,
+            "providers.lock.json",
         )
 
         (
