@@ -14,6 +14,8 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 
+from .github_release_assets import download_release_assets
+
 
 class TreeForgeMenuProviderError(RuntimeError):
     pass
@@ -438,8 +440,10 @@ def _materialize_release_provider() -> tuple[Path, str]:
     PROVIDER_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=f".{version}.partial-", dir=PROVIDER_CACHE_ROOT) as raw:
         temporary = Path(raw)
-        for name in sorted(required):
-            _download_asset(assets[name], temporary / name, token=token)
+        download_release_assets(
+            repository=PROVIDER_REPOSITORY, tag=version,
+            names=required, destination=temporary,
+        )
         metadata_sums = _parse_sums(temporary / "SHA256SUMS")
         expected_metadata = metadata_sums.get("provider.json")
         if expected_metadata is None:
