@@ -3118,6 +3118,31 @@ static void tfb_release_adb_usb_resources_for_android(
         MNT_DETACH
     );
 
+    /*
+     * Bootstrap created these mountpoints before SELinux setup, so
+     * they still carry /dev tmpfs's generic tmpfs context. Leaving
+     * the parent behind prevents Android vendor_init from creating
+     * its MTP/PTP mountpoints. After detaching our FunctionFS mount,
+     * remove only the empty directories so Android can recreate them
+     * with its own file contexts. AT_REMOVEDIR preserves any nonempty
+     * directory; the configfs gadget object remains intact.
+     */
+    tfb_syscall3(
+        SYS_UNLINKAT,
+        AT_FDCWD,
+        (long)
+            "/dev/usb-ffs/adb",
+        AT_REMOVEDIR
+    );
+
+    tfb_syscall3(
+        SYS_UNLINKAT,
+        AT_FDCWD,
+        (long)
+            "/dev/usb-ffs",
+        AT_REMOVEDIR
+    );
+
     tfb_sleep_ms(
         100
     );
