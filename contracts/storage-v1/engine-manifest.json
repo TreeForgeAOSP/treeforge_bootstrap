@@ -1,0 +1,25 @@
+{
+  "schema": "treeforge.storage-engine.fixtures.v1",
+  "synthetic_only": true,
+  "state_filesystem_bytes": 31406948352,
+  "files": {
+    "root-fixture.bin": {
+      "bytes": 2048,
+      "sha256": "0d7d8428ed844102d84b8182e6ba73893d34c034558340acdc14e7cbd7fc34a1"
+    },
+    "engine-request.txt": {
+      "bytes": 969,
+      "sha256": "b71fabb902ea5ecadf7942c1bb70559f7598397f1896ecc64e422d12291b1278"
+    },
+    "boot-record.bin": {
+      "bytes": 4096,
+      "sha256": "908c393f989ec49a31aa3c6473b3169276be387f6287c88ad9540224bfba240d"
+    },
+    "health-ack.txt": {
+      "bytes": 399,
+      "sha256": "aef15aa8848d2732e569f4a3e57e91f1f85d05d0970fff8e5534eea092931683"
+    }
+  },
+  "request_sha256": "b71fabb902ea5ecadf7942c1bb70559f7598397f1896ecc64e422d12291b1278",
+  "purpose": "altos.storage.v1:initialize:9d860b57d3e922c600cc16e61cf90eb7821ddadd3f543cdcc71533447489765f:b71fabb902ea5ecadf7942c1bb70559f7598397f1896ecc64e422d12291b1278:2048"
+}

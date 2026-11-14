@@ -761,6 +761,23 @@ def build_runtime() -> Path:
             "cpio_entry_count":
                 result.entry_count,
         },
+        "alternate_os_storage": {
+            "protocol": 1,
+            "contract_sha256": hashlib.sha256(b"".join(
+                (REPOSITORY_ROOT / "contracts/storage-v1" / name).read_bytes()
+                for name in ("metadata.bin", "boot-record.bin", "health-ack.txt")
+            )).hexdigest(),
+            "source_sha256": _sha256(
+                REPOSITORY_ROOT / "runtime/initramfs/src/alternate_storage.c"
+            ),
+            "trial_deadline_seconds": 300,
+            "device_qualified": False,
+            "kernel_receipt_producer_integrated": True,
+            "kernel_proof_protocol": 2, "image_admission_protocol": 1,
+            "security_handoff_protocol": 1,
+            "security_handoff_source_sha256": _sha256(REPOSITORY_ROOT / "runtime/initramfs/src/security_handoff.c"),
+            "kernel_proof_source_sha256": _sha256(REPOSITORY_ROOT / "runtime/initramfs/src/kernel_proof.c"),
+        },
         "build": {
             "clang":
                 str(clang),

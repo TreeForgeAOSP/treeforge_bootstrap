@@ -9,6 +9,8 @@ import subprocess
 from typing import Any
 
 from .host_providers import ensure_host_tool
+from .security_handoff import carrier_profile
+from .kernel_provider import ensure_kernel_reconstruction_provider
 from .kernel_carriers import (
     TreeForgeKernelCarrierError,
     realize_kernel_carriers,
@@ -2231,6 +2233,13 @@ def realize_family(
         in source_images.items()
     }
 
+    # Inputs already validated by this caller-supplied family flow. They are
+    # public carrier facts, carried inside the existing Owner-signed dispatcher.
+    security_profile = carrier_profile(
+        {name: _properties(info) for name, info in source_infos.items()},
+        ensure_kernel_reconstruction_provider(), source_images["system"],
+    )
+
     kernel_carriers: dict[str, Path] = {}
 
     #
@@ -2245,6 +2254,7 @@ def realize_family(
         )
 
     build_image(
+        security_profile=security_profile,
         source_init_boot=(
             source_images["init_boot"]
         ),
@@ -2259,6 +2269,7 @@ def realize_family(
     )
 
     verify_image(
+        security_profile=security_profile,
         source_init_boot=(
             source_images["init_boot"]
         ),

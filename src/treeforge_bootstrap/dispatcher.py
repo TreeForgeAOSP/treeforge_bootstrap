@@ -4037,9 +4037,12 @@ static int tfb_altroot_mkdir(
 }
 
 
+static void tfb_altos_cleanup(void);
+
 static void tfb_altroot_cleanup_partial(
     void
 ) {
+    tfb_altos_cleanup();
     tfb_syscall2(
         SYS_UMOUNT2,
         (long) TFB_ALTROOT_ROOT,
@@ -4717,6 +4720,10 @@ static void tfb_altroot_collect_identity(
 }
 
 
+static int tfb_kernel_receipt_matches(const unsigned char *provider);
+static void tfb_publish_security_context(void);
+__TREEFORGE_ALTOS_STORAGE_SOURCE__
+
 /*
  * TFB_ALTROOT_INSTALLED_PROBE_V1
  *
@@ -4752,6 +4759,9 @@ static int tfb_altroot_installed(
     ) {
         return 0;
     }
+
+    int storage_v1 = tfb_altos_probe();
+    if (storage_v1 >= 0) return storage_v1;
 
     if (
         tfb_altroot_mount(
@@ -4810,7 +4820,7 @@ static int tfb_altroot_installed(
 }
 
 
-static int tfb_altroot_prepare(
+static int tfb_altroot_prepare_once(
     void
 ) {
     tfb_altroot_cleanup_partial();
@@ -4853,21 +4863,32 @@ static int tfb_altroot_prepare(
         return 0;
     }
 
+    int storage_v1 = tfb_altos_prepare();
+    if (storage_v1 == 0) {
+        tfb_log(tfb_altos_reason);
+        tfb_altroot_cleanup_partial();
+        return 0;
+    }
+    if (storage_v1 < 0) tfb_altos_cleanup();
+
     /*
      * pivot_root requires new_root itself to be a mount point.
      */
     if (
         tfb_altroot_mount(
-            TFB_ALTROOT_STORAGE,
+            tfb_altos_v1 ? TFB_ALTOS_ROOT_NODE : TFB_ALTROOT_STORAGE,
             TFB_ALTROOT_ROOT,
             TFB_ALTROOT_STORAGE_FS,
-            0,
-            0
+            tfb_altos_v1 ? MS_RDONLY : 0,
+            tfb_altos_v1 ? "noload" : 0
         ) < 0
     ) {
         tfb_log(
             "altroot-storage=mount-failed"
         );
+
+        if (tfb_altos_v1 && tfb_altos_trial) tfb_altos_reject_pending();
+        tfb_altroot_cleanup_partial();
 
         return 0;
     }
@@ -4875,6 +4896,16 @@ static int tfb_altroot_prepare(
     tfb_log(
         "altroot-storage=mounted"
     );
+
+    /* Never follow an image-provided mountpoint symlink into the retained
+     * /dev, USB runtime, old Android root or another container region. */
+    if (tfb_altos_v1 && !tfb_altos_mountpoints()) {
+        tfb_log("storage-v1=invalid-root-mountpoints");
+        if (tfb_altos_trial) tfb_altos_reject_pending();
+        tfb_altroot_cleanup_partial();
+        return 0;
+    }
+
 
     const char *directories[] = {
         "/mnt/treeforge-altroot/bin",
@@ -4896,7 +4927,7 @@ static int tfb_altroot_prepare(
         index++
     ) {
         if (
-            !tfb_altroot_mkdir(
+            !tfb_altos_v1 && !tfb_altroot_mkdir(
                 directories[index],
                 0755
             )
@@ -4995,6 +5026,12 @@ static int tfb_altroot_prepare(
         return 0;
     }
 
+    if (!tfb_altos_mount_state()) {
+        tfb_log("storage-v1=STATE-mount-failed");
+        tfb_altroot_cleanup_partial();
+        return 0;
+    }
+
     /*
      * Storage-backed alternate userspace.
      *
@@ -5041,6 +5078,8 @@ static int tfb_altroot_prepare(
             "altroot-storage=payload-missing"
         );
 
+        if (tfb_altos_v1 && tfb_altos_trial) tfb_altos_reject_pending();
+
         tfb_altroot_cleanup_partial();
         return 0;
     }
@@ -5067,6 +5106,18 @@ static int tfb_altroot_prepare(
     );
 
     return 1;
+}
+
+
+static int tfb_altroot_prepare(void) {
+    tfb_altos_retry_confirmed = 0;
+    if (tfb_altroot_prepare_once()) return 1;
+    if (tfb_altos_retry_confirmed) {
+        tfb_altos_retry_confirmed = 0;
+        tfb_log("storage-v1=retry-confirmed-root");
+        return tfb_altroot_prepare_once();
+    }
+    return 0;
 }
 
 
@@ -5732,6 +5783,17 @@ static void tfb_menu_execute_action(
 
             return;
         }
+
+        /* Finish v1 publication before releasing Menu's display/input. A
+         * failed preparation returns to Menu with the existing ADB alive. */
+        if (!tfb_altos_begin()) {
+            tfb_menu_status = "ALTERNATE OS BOOT RECORD ERROR";
+            tfb_log("storage-v1=attempt-publication-failed");
+            tfb_altroot_cleanup_partial();
+            return;
+        }
+
+        tfb_publish_security_context();
 
         /*
          * The graphical menu is about to disappear permanently.
@@ -9457,6 +9519,8 @@ static void tfb_transaction_v2_pre_menu(
 /* TFB_TRANSACTION_V2_BOOTSTRAP_R1_END */
 
 
+__TREEFORGE_KERNEL_PROOF_SOURCE__
+__TREEFORGE_SECURITY_HANDOFF_SOURCE__
 __TREEFORGE_MENU_CONTROLLER_SOURCE__static void tfb_main(
     long argc,
     char **argv,
@@ -9580,6 +9644,12 @@ __TREEFORGE_MENU_CONTROLLER_SOURCE__static void tfb_main(
         tfb_start_adb_service(
             envp
         );
+
+        /* Reconcile only a prior exact health receipt, once per boot. ADB is
+         * already running; Menu inventory itself remains strictly read-only. */
+        tfb_publish_kernel_proof();
+        tfb_altos_reconcile_health();
+        tfb_menu_load_runtime_state();
 
         tfb_run_menu();
     }
@@ -10457,6 +10527,17 @@ void _start(void) {
 
         generated_source = (
             cls._SOURCE
+            .replace(
+                "__TREEFORGE_KERNEL_PROOF_SOURCE__",
+                (Path(__file__).resolve().parents[2] / "runtime/initramfs/src/kernel_proof.c").read_text(encoding="utf-8"),
+            ).replace(
+                "__TREEFORGE_SECURITY_HANDOFF_SOURCE__",
+                (Path(__file__).resolve().parents[2] / "runtime/initramfs/src/security_handoff.c").read_text(encoding="utf-8"),
+            ).replace(
+                "__TREEFORGE_ALTOS_STORAGE_SOURCE__",
+                (Path(__file__).resolve().parents[2] / "runtime/initramfs/src/alternate_storage.c").read_text(encoding="utf-8"),
+                1,
+            )
             .replace(
                 framebuffer_primitives_placeholder,
                 framebuffer_provider.primitives_source,

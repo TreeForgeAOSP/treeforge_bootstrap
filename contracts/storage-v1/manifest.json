@@ -1,0 +1,43 @@
+{
+  "schema": "treeforge.alternate-os.storage-fixture.v1",
+  "file": "metadata.bin",
+  "bytes": 73728,
+  "sha256": "be75ac58bf33f4cd69d6439520ead83a171b2eead214f4f544c40355b1e5b232",
+  "container_bytes": 40000028672,
+  "logical_sector_bytes": 4096,
+  "windows": [
+    {
+      "file_offset": 0,
+      "container_offset": 0,
+      "bytes": 36864
+    },
+    {
+      "file_offset": 36864,
+      "container_offset": 39999991808,
+      "bytes": 36864
+    }
+  ],
+  "disk_guid": "4f177461-4bee-542c-b20b-a2710b1aefda",
+  "outer_partition_guid": "16d75112-f549-536d-8ec3-ac977d4f92e1",
+  "regions": [
+    {
+      "name": "ROOT-A",
+      "offset": 1048576,
+      "bytes": 4294967296,
+      "unique_guid": "f9f64dc7-b516-5145-a006-838c0ff76691"
+    },
+    {
+      "name": "ROOT-B",
+      "offset": 4296015872,
+      "bytes": 4294967296,
+      "unique_guid": "6211f31f-d2ef-5c5b-9dd7-2f9f3cfc8a01"
+    },
+    {
+      "name": "STATE",
+      "offset": 8590983168,
+      "bytes": 31407996928,
+      "unique_guid": "428fd267-5c06-5f19-98a7-178b3fb38e9e"
+    }
+  ],
+  "authority": "synthetic fixture; no authorization or boot-success evidence"
+}

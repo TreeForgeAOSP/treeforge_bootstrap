@@ -14,6 +14,7 @@ from .kernel_provider import (
     KERNEL_REPOSITORY,
     ensure_bootstrap_kernel,
     resolved_kernel_release,
+    ensure_kernel_reconstruction_provider,
 )
 
 from .paths import (
@@ -23,9 +24,18 @@ from .paths import (
 )
 
 from .runtime import (
+    _lz4,
     verify_frozen_runtime,
     verify_runtime,
 )
+
+
+from .kernel_proof import bind_ramdisk, expected_contract
+
+
+def _family_ramdisk(security_profile: bytes | None = None) -> Path:
+    return bind_ramdisk(RUNTIME_RAMDISK, IMAGE_WORK / "kernel-proof-initramfs.lz4",
+                        ensure_kernel_reconstruction_provider(), _lz4(), security_profile)
 
 
 class TreeForgeBootstrapImageError(
@@ -811,6 +821,7 @@ def _expected_metadata(
     signing_public_key_sha1: str,
     source_init_contract: dict[str, object],
     vbmeta_rewrite_required: bool,
+    security_profile: bytes | None = None,
 ) -> dict[str, object]:
     return {
         "schema":
@@ -837,6 +848,11 @@ def _expected_metadata(
 
         "source_boot_chain_public_key_sha1":
             source_child_public_key_sha1,
+
+        "security_profile_sha256": hashlib.sha256(security_profile).hexdigest() if security_profile else None,
+
+        "kernel_proof_contract_sha256": (hashlib.sha256(contract).hexdigest() if
+            (contract := expected_contract(ensure_kernel_reconstruction_provider())) is not None and _family_ramdisk(security_profile) != RUNTIME_RAMDISK else None),
 
         "runtime_ramdisk_sha256":
             _sha256(
@@ -933,6 +949,7 @@ def build_image(
     signing_key: Path | None = None,
     require_parent_match: bool = True,
     development_runtime: bool = False,
+    security_profile: bytes | None = None,
 ) -> Path:
     (
         resolved_source_init_boot,
@@ -1084,7 +1101,7 @@ def build_image(
             "--header_version",
             "4",
             "--ramdisk",
-            str(RUNTIME_RAMDISK),
+            str(_family_ramdisk(security_profile)),
             "--output",
             str(unsigned),
         ]
@@ -1153,6 +1170,7 @@ def build_image(
     )
 
     metadata = _expected_metadata(
+        security_profile=security_profile,
         boot_sha=boot_sha,
         init_boot_sha=init_boot_sha,
         source_init_boot=(
@@ -1250,6 +1268,7 @@ def verify_image(
     signing_key: Path | None = None,
     require_parent_match: bool = True,
     development_runtime: bool = False,
+    security_profile: bytes | None = None,
 ) -> Path:
     (
         resolved_source_init_boot,
@@ -1599,9 +1618,7 @@ def verify_image(
             "unpacked init_boot ramdisk missing"
         )
 
-    runtime_sha = _sha256(
-        RUNTIME_RAMDISK
-    )
+    runtime_sha = _sha256(_family_ramdisk(security_profile))
 
     unpacked_sha = _sha256(
         unpacked_ramdisk
@@ -1624,6 +1641,7 @@ def verify_image(
 
     expected_metadata = (
         _expected_metadata(
+            security_profile=security_profile,
             boot_sha=boot_sha,
             init_boot_sha=init_boot_sha,
             source_init_boot=(

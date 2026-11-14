@@ -1,0 +1,15 @@
+{
+  "schema": "treeforge.alternate-os.codec-fixture-source.v1",
+  "authority": "TreeForgeDEV/treeforge_updated",
+  "storage_protocol": 1,
+  "source": "fixtures/storage-v1; frozen copy, no sibling dependency",
+  "files": {
+    "boot-record.bin": "908c393f989ec49a31aa3c6473b3169276be387f6287c88ad9540224bfba240d",
+    "engine-manifest.json": "6f286d5494e26f320f53b6a3b6382d22844901c1097d75d65cff4c8a1e64c1c9",
+    "engine-request.txt": "b71fabb902ea5ecadf7942c1bb70559f7598397f1896ecc64e422d12291b1278",
+    "health-ack.txt": "aef15aa8848d2732e569f4a3e57e91f1f85d05d0970fff8e5534eea092931683",
+    "manifest.json": "d827dda63af15a493bd2115c9f8b5834d22fbe54500e9238a461a13b44274eb4",
+    "metadata.bin": "be75ac58bf33f4cd69d6439520ead83a171b2eead214f4f544c40355b1e5b232",
+    "root-fixture.bin": "0d7d8428ed844102d84b8182e6ba73893d34c034558340acdc14e7cbd7fc34a1"
+  }
+}

@@ -170,6 +170,9 @@ def _payload_paths() -> list[Path]:
             "diagnostic_init.c"
         ),
         Path("treeforge-bootstrap"),
+        Path("runtime/initramfs/src/alternate_storage.c"),
+        Path("runtime/initramfs/src/kernel_proof.c"),
+        Path("runtime/initramfs/src/security_handoff.c"),
     ]
 
     python_sources = sorted(
