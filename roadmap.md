@@ -1,5 +1,19 @@
 # TreeForge Bootstrap family roadmap
 
+## Post-reset availability — November 17, 17:00 EST review
+
+- [x] VERIFIED / CHECKOUT RESTORED — The post-reset checkout is available on `main` (`8ed1333`); the recovered November 16 roadmap reconciliation remains an uncommitted edit and is preserved.
+- [ ] EVIDENCE AVAILABILITY — `out/releases/v1.0b5/publication.json`, `out/` and `.smoke/` are absent on this reset host. The publication/runtime claims below retain their historical scope; they are not fresh artifact verification. Before the next release or hardware qualification, obtain and verify the exact required provider/receipt inputs through a separately authorized workflow. Bootstrap owns that prerequisite; Kernel and ChromiumOS acceptance gates remain unchanged.
+
+Evidence: read-only local branch/path inspection and the [recovery audit](https://chatgpt.com/c/6afcc7b4-c74c-83e9-af0f-65c30bfcb6ab?messageId=a679d868-ebf4-4803-90ab-c6e0934c9003). This review changes roadmap text only; existing source and documentation edits are preserved. No builds, fetches, commits, pushes or device operations.
+
+## Published-family reconciliation — November 16 scheduled review
+
+- [x] RECORDED / SCOPED RELEASE EVIDENCE — Bootstrap v1.0b5 beta publication is established by the retained receipt. The project’s November 14 read-only Android Slot-A audit reports Bootstrap/boot checks matched, with Kernel r0.94-v1.0b2 identified by provider hash, payload hash and build ID. Framebuffer and Menu remain v1.0b2.
+- [ ] OPEN / DISTINCT FOLLOW-UPS — This is regular mode=none Android-family acceptance, not protected-mode, a new ChromiumOS boot or credential qualification. Preserve B-07 and the saved pivot_root/Microdroid plan.
+
+Evidence: [retained evidence](out/releases/v1.0b5/publication.json); **Investigate ChromeOS boot crash**, local thread `01a1a76f-b0bf-76c1-bfa7-bae30542f3aa`, completed release-summary turn `01a1d881-c149-7d80-86e7-c9265deaf2a8`, published-family audit `01a1d88b-6d30-77f1-acb1-352f984d9cba` and reporting-deferral message `01a1d88d-5186-7053-b6e4-b497176b6f5b`. Publication receipts were read locally, not rechecked over the network. This review changed this existing roadmap only; no code, builds, tests, device operations, fetches, commits or pushes. Earlier checkpoints below retain their historical scope.
+
 ## Current checkpoint: November 11, 18:00 UTC review
 
 - [x] SAVED PLAN / AFTER KERNEL QUALIFICATION — The user saved the refined stock-Microdroid credential plan for the later return after SS and protected-mode Kernel work. Keep the existing shared-kernel `pivot_root` handoff and ordinary `mode=none` fallback. The next downstream experiment uses separate `instance.img` and encrypted-disk files on ChromiumOS STATE, not a new PP partition or Bootstrap credential store.
